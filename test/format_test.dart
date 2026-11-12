@@ -15,6 +15,10 @@ void main() {
     expect(etaLabel(0.4), "closing now");
     expect(etaLabel(8), "closes in 8 min");
     expect(etaLabel(90), "closes in 1 hr 30 min");
+    final at = DateTime(2026, 11, 13, 1, 0);
+    expect(checkedAgo(at, at.add(const Duration(seconds: 20))), "Checked just now");
+    expect(checkedAgo(at, at.add(const Duration(minutes: 4))), "Checked 4 min ago");
+    expect(checkedAgo(at, at.add(const Duration(minutes: 90))), "Checked 1 hr 30 min ago");
     expect(delayLabel(12), "12 min late");
     expect(delayLabel(-3), "3 min early");
     expect(labelStatus("closing_soon"), "Closing");

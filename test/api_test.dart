@@ -37,6 +37,24 @@ void main() {
     ]);
   });
 
+  test("city search reads the Indian city list", () async {
+    final api = HttpRailApi(
+      base: "http://127.0.0.1:8000",
+      client: MockClient((request) async {
+        expect(request.url.path, "/cities");
+        expect(request.url.queryParameters["q"], "pune");
+        return http.Response(
+          '{"cities":[{"name":"Pune","state":"Maharashtra","lat":18.52,"lon":73.86}]}',
+          200,
+        );
+      }),
+    );
+    final cities = await api.cities("pune");
+    expect(cities.single.name, "Pune");
+    expect(cities.single.state, "Maharashtra");
+    expect(cities.single.lat, 18.52);
+  });
+
   test("a busy predict tells the person to wait", () async {
     final api = HttpRailApi(
       base: "http://10.0.2.2:8000",
@@ -81,8 +99,22 @@ void main() {
         },
       ],
       "sightings": [
-        {"number": "16312", "name": "Vanchinad", "current": "KANNUR", "delay": 4, "age": 3, "passed_local": false},
-        {"number": "16604", "name": "Maveli", "current": "KASARAGOD", "delay": 0, "age": 50, "passed_local": false},
+        {
+          "number": "16312",
+          "name": "Vanchinad",
+          "current": "KANNUR",
+          "delay": 4,
+          "age": 3,
+          "passed_local": false,
+        },
+        {
+          "number": "16604",
+          "name": "Maveli",
+          "current": "KASARAGOD",
+          "delay": 0,
+          "age": 50,
+          "passed_local": false,
+        },
       ],
     });
     expect(predict.approaching.single.ids, ["a", "b"]);

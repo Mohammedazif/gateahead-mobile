@@ -7,13 +7,17 @@ import "format.dart";
 import "models.dart";
 
 class RailController extends ChangeNotifier {
-  RailController(this.api, {this.nameDelay = const Duration(milliseconds: 280)});
+  RailController(
+    this.api, {
+    this.nameDelay = const Duration(milliseconds: 280),
+  });
 
   final Duration nameDelay;
 
   final RailApi api;
 
   Spot? place;
+  String? placeLabel;
   Spot? pending;
   String? spotName;
   bool naming = false;
@@ -21,6 +25,7 @@ class RailController extends ChangeNotifier {
   bool loadingGates = false;
   String? gatesNote;
   Predict? predict;
+  DateTime? checkedAt;
   bool checking = false;
   bool locating = false;
   String? error;
@@ -35,6 +40,7 @@ class RailController extends ChangeNotifier {
   Timer? _nameTimer;
 
   void askPlace(double lat, double lon) {
+    placeLabel = null;
     pending = Spot(lat, lon);
     spotName = null;
     naming = true;
@@ -71,6 +77,7 @@ class RailController extends ChangeNotifier {
     if (next == null || _confirming) return;
     _confirming = true;
     _nameTimer?.cancel();
+    placeLabel = null;
     pending = null;
     notifyListeners();
     try {
@@ -86,6 +93,7 @@ class RailController extends ChangeNotifier {
     place = Spot(lat, lon);
     pending = null;
     predict = null;
+    checkedAt = null;
     error = null;
     selected = null;
     scene = null;
@@ -123,7 +131,13 @@ class RailController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void openCity(String label, double lat, double lon) {
+    placeLabel = label;
+    unawaited(choosePlace(lat, lon));
+  }
+
   void beginLocate() {
+    placeLabel = null;
     locating = true;
     error = null;
     notifyListeners();
@@ -140,6 +154,7 @@ class RailController extends ChangeNotifier {
       final body = await api.predict(here.lat, here.lon);
       if (ticket != _generation) return;
       predict = body;
+      checkedAt = DateTime.now();
     } on RailException catch (err) {
       if (ticket != _generation) return;
       error = err.message;
@@ -168,9 +183,7 @@ class RailController extends ChangeNotifier {
       if (ticket != _sceneTicket) return;
       scene = body;
       if (!body.available || body.rail.length < 2) {
-        sceneMessage = body.error.isNotEmpty
-            ? friendlyError(body.error)
-            : "This crossing has no rail line on the map, so the train stays off it.";
+        sceneMessage = body.error.isNotEmpty ? friendlyError(body.error) : "This crossing has no rail line on the map, so the train stays off it.";
       }
     } on RailException catch (err) {
       if (ticket != _sceneTicket) return;

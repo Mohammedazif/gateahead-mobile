@@ -1,9 +1,12 @@
+import "dart:async";
+
 import "package:flutter/material.dart";
 
 import "../format.dart";
 import "../models.dart";
 import "../rail_controller.dart";
 import "../theme.dart";
+import "city_search.dart";
 
 class TrainSheet extends StatelessWidget {
   const TrainSheet({
@@ -93,6 +96,15 @@ class TrainSheet extends StatelessWidget {
             style: text.bodyLarge?.copyWith(color: colors.muted, height: 1.45),
           ),
           const SizedBox(height: 14),
+          CitySearch(
+            api: rail.api,
+            onPick: (city) => rail.openCity(
+              "${city.name}, ${city.state}",
+              city.lat,
+              city.lon,
+            ),
+          ),
+          const SizedBox(height: 14),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -131,6 +143,7 @@ class TrainSheet extends StatelessWidget {
               ),
             ],
           ),
+          if (rail.checkedAt != null) CheckedAgo(at: rail.checkedAt!),
           if (rail.error != null) ...[
             const SizedBox(height: 12),
             Text(
@@ -179,14 +192,22 @@ class TrainSheet extends StatelessWidget {
   }
 
   static String _lede(RailController rail) {
+    final where = rail.placeLabel;
     if (rail.place == null) {
-      return "Highlighted lines are the railway. Tap the map where you are, or share your location.";
+      return "Highlighted lines are the railway. Search an Indian city, tap the map, or share your location.";
     }
-    if (rail.loadingGates) return "Looking up crossings…";
+    if (rail.loadingGates) {
+      return where == null
+          ? "Looking up crossings…"
+          : "Looking up crossings in $where…";
+    }
     if (rail.gatesNote != null) return "Crossings for this place did not load.";
-    if (rail.gates.isEmpty) return "No railway crossings on the map here.";
+    final prefix = where == null ? "" : "$where. ";
+    if (rail.gates.isEmpty) {
+      return "${prefix}No railway crossings on the map here.";
+    }
     final count = rail.gates.length;
-    return "$count crossings on this map.";
+    return "$prefix$count crossings on this map.";
   }
 }
 
@@ -479,6 +500,46 @@ class _GateRow extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class CheckedAgo extends StatefulWidget {
+  const CheckedAgo({super.key, required this.at});
+
+  final DateTime at;
+
+  @override
+  State<CheckedAgo> createState() => _CheckedAgoState();
+}
+
+class _CheckedAgoState extends State<CheckedAgo> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = RailColors.of(context);
+    final text = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Text(
+        checkedAgo(widget.at, DateTime.now()),
+        style: text.bodyMedium?.copyWith(color: colors.muted, height: 1.45),
       ),
     );
   }

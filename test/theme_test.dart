@@ -14,9 +14,15 @@ void main() {
     expect(await RailThemeStore.read(), RailThemeMode.dark);
     await RailThemeStore.write(RailThemeMode.light);
     expect(await RailThemeStore.read(), RailThemeMode.light);
-    expect(RailColors.light.mapStyle, "https://tiles.openfreemap.org/styles/positron");
+    expect(
+      RailColors.light.mapStyle,
+      "https://tiles.openfreemap.org/styles/positron",
+    );
     expect(RailColors.light.accent, const Color(0xFF8A4E0D));
-    expect(RailColors.dark.mapStyle, "https://tiles.openfreemap.org/styles/dark");
+    expect(
+      RailColors.dark.mapStyle,
+      "https://tiles.openfreemap.org/styles/dark",
+    );
     expect(RailColors.light.toggleLabel, "Dark");
     expect(RailColors.dark.toggleLabel, "Light");
   });
@@ -34,13 +40,17 @@ void main() {
           return RailThemeScope(
             onToggle: () {
               setState(() {
-                mode = mode == RailThemeMode.light ? RailThemeMode.dark : RailThemeMode.light;
+                mode = mode == RailThemeMode.light
+                    ? RailThemeMode.dark
+                    : RailThemeMode.light;
               });
             },
             child: MaterialApp(
               theme: railTheme(RailColors.forMode(mode)),
               themeAnimationDuration: Duration.zero,
-              home: Scaffold(body: TrainSheet(rail: rail, onLocate: () {}, scroll: scroll)),
+              home: Scaffold(
+                body: TrainSheet(rail: rail, onLocate: () {}, scroll: scroll),
+              ),
             ),
           );
         },
@@ -51,14 +61,20 @@ void main() {
     await tester.tap(find.text("Light"));
     await tester.pump();
     expect(find.text("Dark"), findsOneWidget);
-    final decoration = tester.widget<DecoratedBox>(find.byType(DecoratedBox).first).decoration as BoxDecoration;
+    final decoration =
+        tester.widget<DecoratedBox>(find.byType(DecoratedBox).first).decoration
+            as BoxDecoration;
     expect(decoration.color, RailColors.light.sheet);
   });
 }
 
 class _IdleApi implements RailApi {
   @override
-  Future<GatesBody> gates(double lat, double lon) async => const GatesBody(gates: []);
+  Future<List<CityHit>> cities(String query) async => const [];
+
+  @override
+  Future<GatesBody> gates(double lat, double lon) async =>
+      const GatesBody(gates: []);
 
   @override
   Future<String?> placeName(double lat, double lon) async => null;
@@ -67,5 +83,6 @@ class _IdleApi implements RailApi {
   Future<Predict> predict(double lat, double lon) async => const Predict();
 
   @override
-  Future<Scene> scene(double lat, double lon, String crossingId) async => const Scene(available: false);
+  Future<Scene> scene(double lat, double lon, String crossingId) async =>
+      const Scene(available: false);
 }

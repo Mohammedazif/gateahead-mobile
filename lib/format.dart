@@ -1,5 +1,15 @@
 import "models.dart";
 
+String checkedAgo(DateTime at, DateTime now) {
+  final minutes = now.difference(at).inMinutes;
+  if (minutes < 1) return "Checked just now";
+  if (minutes < 60) return "Checked $minutes min ago";
+  final hours = minutes ~/ 60;
+  final mins = minutes % 60;
+  if (mins == 0) return "Checked $hours hr ago";
+  return "Checked $hours hr $mins min ago";
+}
+
 String friendlyError(String? message) {
   if (message == null || message.isEmpty) {
     return "Something went wrong. Try again in a moment.";
