@@ -1,4 +1,4 @@
-package `in`.smartrail.smartrail
+package `in`.gateahead.gateahead
 
 import io.flutter.embedding.android.FlutterActivity
 

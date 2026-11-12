@@ -1,9 +1,9 @@
 import "package:flutter_test/flutter_test.dart";
 import "package:http/http.dart" as http;
 import "package:http/testing.dart";
-import "package:smartrail/api.dart";
-import "package:smartrail/geo.dart";
-import "package:smartrail/models.dart";
+import "package:gateahead/api.dart";
+import "package:gateahead/geo.dart";
+import "package:gateahead/models.dart";
 
 void main() {
   test("gate and scene payloads use the FastAPI paths", () async {

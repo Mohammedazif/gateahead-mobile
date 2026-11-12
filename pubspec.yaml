@@ -1,4 +1,4 @@
-name: smartrail
+name: gateahead
 description: India-wide railway level-crossing alerts.
 publish_to: "none"
 version: 0.1.0+1
@@ -22,3 +22,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/india_outline.geojson
+    - assets/india_rail.geojson

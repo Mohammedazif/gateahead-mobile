@@ -1,6 +1,6 @@
 import "package:flutter_test/flutter_test.dart";
-import "package:smartrail/format.dart";
-import "package:smartrail/models.dart";
+import "package:gateahead/format.dart";
+import "package:gateahead/models.dart";
 
 void main() {
   test("friendly errors stay short", () {

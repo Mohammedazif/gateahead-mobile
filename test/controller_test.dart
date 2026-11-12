@@ -1,9 +1,9 @@
 import "dart:async";
 
 import "package:flutter_test/flutter_test.dart";
-import "package:smartrail/api.dart";
-import "package:smartrail/models.dart";
-import "package:smartrail/rail_controller.dart";
+import "package:gateahead/api.dart";
+import "package:gateahead/models.dart";
+import "package:gateahead/rail_controller.dart";
 
 void main() {
   test("a newer place wins when two lookups overlap", () async {

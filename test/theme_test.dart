@@ -2,11 +2,11 @@ import "package:flutter/material.dart";
 import "package:flutter_test/flutter_test.dart";
 import "package:google_fonts/google_fonts.dart";
 import "package:shared_preferences/shared_preferences.dart";
-import "package:smartrail/api.dart";
-import "package:smartrail/models.dart";
-import "package:smartrail/rail_controller.dart";
-import "package:smartrail/theme.dart";
-import "package:smartrail/ui/train_sheet.dart";
+import "package:gateahead/api.dart";
+import "package:gateahead/models.dart";
+import "package:gateahead/rail_controller.dart";
+import "package:gateahead/theme.dart";
+import "package:gateahead/ui/train_sheet.dart";
 
 void main() {
   test("the saved choice matches the website", () async {

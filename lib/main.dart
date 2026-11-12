@@ -10,7 +10,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final mode = await RailThemeStore.read();
   _overlay(RailColors.forMode(mode));
-  runApp(SmartRailApp(rail: RailController(HttpRailApi(base: defaultApiBase)), initialMode: mode));
+  runApp(GateAheadApp(rail: RailController(HttpRailApi(base: defaultApiBase)), initialMode: mode));
 }
 
 void _overlay(RailColors colors) {
@@ -26,17 +26,17 @@ void _overlay(RailColors colors) {
   );
 }
 
-class SmartRailApp extends StatefulWidget {
-  const SmartRailApp({super.key, required this.rail, this.initialMode = RailThemeMode.dark});
+class GateAheadApp extends StatefulWidget {
+  const GateAheadApp({super.key, required this.rail, this.initialMode = RailThemeMode.dark});
 
   final RailController rail;
   final RailThemeMode initialMode;
 
   @override
-  State<SmartRailApp> createState() => _SmartRailAppState();
+  State<GateAheadApp> createState() => _GateAheadAppState();
 }
 
-class _SmartRailAppState extends State<SmartRailApp> {
+class _GateAheadAppState extends State<GateAheadApp> {
   late RailThemeMode _mode = widget.initialMode;
 
   @override
@@ -58,7 +58,7 @@ class _SmartRailAppState extends State<SmartRailApp> {
     return RailThemeScope(
       onToggle: _toggleTheme,
       child: MaterialApp(
-        title: "SmartRail",
+        title: "GateAhead",
         debugShowCheckedModeBanner: false,
         theme: railTheme(colors),
         themeAnimationDuration: Duration.zero,

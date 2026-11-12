@@ -1,6 +1,6 @@
-# SmartRail
+# GateAhead
 
-Flutter client for the SmartRail API. iOS, Android, and Linux share this project. The Python API is a separate repository. Prediction stays there.
+Flutter client for the GateAhead API. iOS, Android, and Linux share this project. The Python API is a separate repository. Prediction stays there.
 
 ```bash
 flutter pub get
@@ -8,7 +8,7 @@ flutter test
 flutter run --dart-define=API_BASE=http://10.0.2.2:8000
 ```
 
-Start the API with `uvicorn smartrail.api.app:app --host 0.0.0.0 --port 8000`.
+Start the API with `uvicorn gateahead.api.app:app --host 0.0.0.0 --port 8000`.
 
 - This Linux desktop: `flutter run -d linux --dart-define=API_BASE=http://127.0.0.1:8000`
 - Android emulator: `http://10.0.2.2:8000`

@@ -6,11 +6,18 @@ import "../rail_controller.dart";
 import "../theme.dart";
 
 class TrainSheet extends StatelessWidget {
-  const TrainSheet({super.key, required this.rail, required this.onLocate, required this.scroll});
+  const TrainSheet({
+    super.key,
+    required this.rail,
+    required this.onLocate,
+    required this.scroll,
+    this.docked = false,
+  });
 
   final RailController rail;
   final VoidCallback onLocate;
   final ScrollController scroll;
+  final bool docked;
 
   @override
   Widget build(BuildContext context) {
@@ -19,24 +26,38 @@ class TrainSheet extends StatelessWidget {
     final shown = shownGates(gates);
     final colors = RailColors.of(context);
     final text = Theme.of(context).textTheme;
-    return DecoratedBox(
+    final sheet = DecoratedBox(
       decoration: BoxDecoration(
         color: colors.sheet,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-        border: Border(top: BorderSide(color: colors.line)),
+        borderRadius: docked
+            ? BorderRadius.zero
+            : const BorderRadius.vertical(top: Radius.circular(18)),
+        border: Border(
+          top: docked ? BorderSide.none : BorderSide(color: colors.line),
+          left: docked ? BorderSide(color: colors.line) : BorderSide.none,
+        ),
       ),
       child: ListView(
         controller: scroll,
-        padding: EdgeInsets.fromLTRB(18, 10, 18, 16 + MediaQuery.paddingOf(context).bottom),
+        padding: EdgeInsets.fromLTRB(
+          docked ? 22 : 18,
+          docked ? 28 : 10,
+          docked ? 22 : 18,
+          16 + MediaQuery.paddingOf(context).bottom,
+        ),
         children: [
-          Center(
-            child: Container(
-              width: 36,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 12),
-              decoration: BoxDecoration(color: colors.line, borderRadius: BorderRadius.circular(99)),
+          if (!docked)
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: colors.line,
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
             ),
-          ),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -45,7 +66,7 @@ class TrainSheet extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text("CROSSINGS", style: railEyebrow(colors)),
-                    Text("SmartRail", style: text.headlineLarge),
+                    Text("GateAhead", style: text.headlineLarge),
                   ],
                 ),
               ),
@@ -55,7 +76,10 @@ class TrainSheet extends StatelessWidget {
                   foregroundColor: colors.ink,
                   side: BorderSide(color: colors.line),
                   shape: const StadiumBorder(),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
@@ -64,7 +88,10 @@ class TrainSheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Text(_lede(rail), style: text.bodyLarge?.copyWith(color: colors.muted, height: 1.45)),
+          Text(
+            _lede(rail),
+            style: text.bodyLarge?.copyWith(color: colors.muted, height: 1.45),
+          ),
           const SizedBox(height: 14),
           Wrap(
             spacing: 8,
@@ -76,19 +103,29 @@ class TrainSheet extends StatelessWidget {
                   foregroundColor: colors.ink,
                   side: BorderSide(color: colors.line),
                   shape: const StadiumBorder(),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                 ),
                 child: Text(rail.locating ? "Finding…" : "Use my location"),
               ),
               FilledButton(
-                onPressed: place == null || rail.checking ? null : () => rail.check(),
+                onPressed: place == null || rail.checking
+                    ? null
+                    : () => rail.check(),
                 style: FilledButton.styleFrom(
                   backgroundColor: colors.amber,
                   foregroundColor: RailColors.inkDark,
                   disabledBackgroundColor: colors.amber.withValues(alpha: 0.45),
-                  disabledForegroundColor: RailColors.inkDark.withValues(alpha: 0.7),
+                  disabledForegroundColor: RailColors.inkDark.withValues(
+                    alpha: 0.7,
+                  ),
                   shape: const StadiumBorder(),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                 ),
                 child: Text(rail.checking ? "Checking…" : "Check trains"),
               ),
@@ -96,11 +133,17 @@ class TrainSheet extends StatelessWidget {
           ),
           if (rail.error != null) ...[
             const SizedBox(height: 12),
-            Text(rail.error!, style: text.bodyMedium?.copyWith(color: colors.warn)),
+            Text(
+              rail.error!,
+              style: text.bodyMedium?.copyWith(color: colors.warn),
+            ),
           ],
           if (rail.gatesNote != null) ...[
             const SizedBox(height: 12),
-            Text(rail.gatesNote!, style: text.bodyMedium?.copyWith(color: colors.warn)),
+            Text(
+              rail.gatesNote!,
+              style: text.bodyMedium?.copyWith(color: colors.warn),
+            ),
           ],
           if (rail.predict != null) PredictBody(predict: rail.predict!),
           if (shown.isNotEmpty) ...[
@@ -112,13 +155,16 @@ class TrainSheet extends StatelessWidget {
                 gate: gate,
                 selected: gate.id == rail.selected?.id,
                 onTap: () {
-                rail.openGate(gate);
-              },
+                  rail.openGate(gate);
+                },
               ),
               const SizedBox(height: 8),
             ],
             if (gates.length > shown.length)
-              Text("The rest are marked on the map.", style: text.bodyMedium?.copyWith(color: colors.muted)),
+              Text(
+                "The rest are marked on the map.",
+                style: text.bodyMedium?.copyWith(color: colors.muted),
+              ),
           ],
           const SizedBox(height: 8),
           Text(
@@ -128,11 +174,13 @@ class TrainSheet extends StatelessWidget {
         ],
       ),
     );
+    if (!docked) return sheet;
+    return SizedBox.expand(child: sheet);
   }
 
   static String _lede(RailController rail) {
     if (rail.place == null) {
-      return "Share where you are, or tap the map. The crossings around that point come up next.";
+      return "Highlighted lines are the railway. Tap the map where you are, or share your location.";
     }
     if (rail.loadingGates) return "Looking up crossings…";
     if (rail.gatesNote != null) return "Crossings for this place did not load.";
@@ -154,7 +202,10 @@ class PredictBody extends StatelessWidget {
     if (predict.error.isNotEmpty) {
       return Padding(
         padding: const EdgeInsets.only(top: 16),
-        child: Text(friendlyError(predict.error), style: text.bodyMedium?.copyWith(color: colors.warn)),
+        child: Text(
+          friendlyError(predict.error),
+          style: text.bodyMedium?.copyWith(color: colors.warn),
+        ),
       );
     }
     final grouped = groupApproaches(predict.approaching);
@@ -178,7 +229,8 @@ class PredictBody extends StatelessWidget {
             style: text.bodyMedium?.copyWith(color: colors.muted),
           )
         else
-          for (final entry in grouped.entries) _TrainBlock(number: entry.key, rows: entry.value),
+          for (final entry in grouped.entries)
+            _TrainBlock(number: entry.key, rows: entry.value),
         if (sightings.isNotEmpty) ...[
           const SizedBox(height: 8),
           Text("ON THIS LINE", style: railEyebrow(colors)),
@@ -204,7 +256,9 @@ class _TrainBlock extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: DecoratedBox(
-        decoration: BoxDecoration(border: Border(top: BorderSide(color: colors.line))),
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: colors.line)),
+        ),
         child: Padding(
           padding: const EdgeInsets.only(top: 12),
           child: Column(
@@ -213,9 +267,17 @@ class _TrainBlock extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(child: Text("$number ${head.name}", style: text.titleMedium)),
+                  Expanded(
+                    child: Text(
+                      "$number ${head.name}",
+                      style: text.titleMedium,
+                    ),
+                  ),
                   const SizedBox(width: 8),
-                  StatusPip(status: head.status, label: labelStatus(head.status)),
+                  StatusPip(
+                    status: head.status,
+                    label: labelStatus(head.status),
+                  ),
                 ],
               ),
               RunLines(copy: copy),
@@ -224,15 +286,25 @@ class _TrainBlock extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 6),
                   child: Row(
                     children: [
-                      Expanded(child: Text(row.cluster.isEmpty ? "Level crossing" : row.cluster)),
-                      Text(etaLabel(row.eta), style: text.bodyMedium?.copyWith(color: colors.muted)),
+                      Expanded(
+                        child: Text(
+                          row.cluster.isEmpty ? "Level crossing" : row.cluster,
+                        ),
+                      ),
+                      Text(
+                        etaLabel(row.eta),
+                        style: text.bodyMedium?.copyWith(color: colors.muted),
+                      ),
                     ],
                   ),
                 ),
               if (head.bracket.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
-                  child: Text(head.bracket, style: text.bodyMedium?.copyWith(color: colors.muted)),
+                  child: Text(
+                    head.bracket,
+                    style: text.bodyMedium?.copyWith(color: colors.muted),
+                  ),
                 ),
             ],
           ),
@@ -260,9 +332,17 @@ class _SightingBlock extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: Text("${row.number} ${row.name}", style: text.titleMedium)),
+              Expanded(
+                child: Text(
+                  "${row.number} ${row.name}",
+                  style: text.titleMedium,
+                ),
+              ),
               const SizedBox(width: 8),
-              StatusPip(status: delayClass(row.runInfo.delay), label: delayLabel(row.runInfo.delay)),
+              StatusPip(
+                status: delayClass(row.runInfo.delay),
+                label: delayLabel(row.runInfo.delay),
+              ),
             ],
           ),
           RunLines(copy: copy),
@@ -319,13 +399,19 @@ class StatusPip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = RailColors.of(context);
-    final filled = status == "closed" || status == "closing_soon" || status == "late" || status == "early";
+    final filled =
+        status == "closed" ||
+        status == "closing_soon" ||
+        status == "late" ||
+        status == "early";
     final background = switch (status) {
       "closed" => colors.red,
       "closing_soon" || "late" || "early" => RailColors.closing,
       _ => Colors.transparent,
     };
-    final foreground = status == "closed" ? Colors.white : (filled ? RailColors.inkDark : colors.amber);
+    final foreground = status == "closed"
+        ? Colors.white
+        : (filled ? RailColors.inkDark : colors.amber);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
@@ -335,14 +421,19 @@ class StatusPip extends StatelessWidget {
       ),
       child: Text(
         label.toUpperCase(),
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: foreground, letterSpacing: 0.4),
+        style: Theme.of(context).textTheme.labelSmall
+            ?.copyWith(color: foreground, letterSpacing: 0.4),
       ),
     );
   }
 }
 
 class _GateRow extends StatelessWidget {
-  const _GateRow({required this.gate, required this.selected, required this.onTap});
+  const _GateRow({
+    required this.gate,
+    required this.selected,
+    required this.onTap,
+  });
 
   final Gate gate;
   final bool selected;
@@ -379,10 +470,11 @@ class _GateRow extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               Text(
-                gate.eta != null ? etaLabel(gate.eta!) : "${gate.km.toStringAsFixed(1)} km",
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: hot ? colors.hot : colors.muted,
-                ),
+                gate.eta != null
+                    ? etaLabel(gate.eta!)
+                    : "${gate.km.toStringAsFixed(1)} km",
+                style: Theme.of(context).textTheme.bodyMedium
+                    ?.copyWith(color: hot ? colors.hot : colors.muted),
               ),
             ],
           ),
@@ -391,4 +483,3 @@ class _GateRow extends StatelessWidget {
     );
   }
 }
-

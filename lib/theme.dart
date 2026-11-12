@@ -194,12 +194,14 @@ ThemeData railTheme(RailColors colors) {
 }
 
 class RailThemeStore {
-  static const key = "smartrail-theme";
+  static const key = "gateahead-theme";
+  static const legacyKey = "smartrail-theme";
 
   static Future<RailThemeMode> read() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      return prefs.getString(key) == "light" ? RailThemeMode.light : RailThemeMode.dark;
+      final saved = prefs.getString(key) ?? prefs.getString(legacyKey);
+      return saved == "light" ? RailThemeMode.light : RailThemeMode.dark;
     } catch (_) {
       return RailThemeMode.dark;
     }
@@ -209,6 +211,7 @@ class RailThemeStore {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(key, mode == RailThemeMode.light ? "light" : "dark");
+      await prefs.remove(legacyKey);
     } catch (_) {
       // Storage can be blocked. The toggle still applies for this visit.
     }
