@@ -2,6 +2,44 @@
 
 Flutter client for the GateAhead API. iOS, Android, and Linux share this project. The Python API is a separate repository. Prediction stays there.
 
+## Build phone apps with GitHub
+
+The **Android app** and **iPhone app** workflows build this Flutter project and publish downloads under [Releases](https://github.com/Mohammedazif/gateahead-mobile/releases), like Roostling.
+
+Both workflows use Flutter 3.47.9 and call `https://gateahead-api.onrender.com`. To use another server, set the repository's **Settings → Secrets and variables → Actions → Variables → API_BASE** to its public HTTPS address, without a trailing `/api`. The backend must be running for city search, gates, and train predictions to work.
+
+### One-time Android signing setup
+
+Run this from the `mobile` repository on a computer with OpenSSL and an authenticated [GitHub CLI](https://cli.github.com/):
+
+```bash
+bash tools/setup-android-signing.sh
+```
+
+This creates a password-protected signing key in the ignored `.signing/` folder and uploads two repository secrets: `GATEAHEAD_ANDROID_KEYSTORE_BASE64` and `GATEAHEAD_ANDROID_KEYSTORE_PASSWORD`. It reuses the existing key when run again. Back up `.signing/`; future updates must use the same key. For offline key creation, pass `--local-only`, then run the command without that flag when GitHub is reachable.
+
+### Android test
+
+1. Push these files to the repository's default branch.
+2. Open **Actions → Android app → Run workflow** and select `main`.
+3. Once it succeeds, open the [Android test release](https://github.com/Mohammedazif/gateahead-mobile/releases/tag/android-latest).
+4. Download `gateahead-android.apk` on your Android phone, open it, and allow installation from your browser or file manager when asked.
+
+The APK uses a permanent signing key so subsequent builds can update the installed app. If an earlier debug build is already installed with the same app ID, uninstall it before installing this signed build.
+
+### iPhone test
+
+1. Open **Actions → iPhone app → Run workflow** and select `main`.
+2. Once it succeeds, download `gateahead-ios-unsigned.ipa` from the [iPhone test release](https://github.com/Mohammedazif/gateahead-mobile/releases/tag/ios-latest) onto a Mac or Windows computer.
+3. Connect your iPhone and open the IPA in [Sideloadly](https://sideloadly.io/) or [AltStore](https://faq.altstore.io/altstore-classic/how-to-use-altstore).
+4. Sign and install it using your own Apple ID. Trust the developer profile under **Settings → General → VPN & Device Management** and enable **Settings → Privacy & Security → Developer Mode** if prompted.
+
+Requires iOS 15 or later. The IPA is a device build; it needs signing before installation and cannot be installed just by tapping the file in Safari. A free Apple ID works for personal testing, with refresh required every seven days. Apple credentials stay on your computer; no Apple signing secrets are required by the workflow. Sideloadly is available for macOS and Windows, so a Linux-only setup needs access to one of those computers for installation. TestFlight would require a separate Apple Developer distribution setup.
+
+Both workflows also run when a `v*` tag is pushed, uploading their files to the same versioned release. Manual builds update the respective `android-latest` and `ios-latest` prereleases. Downloads go directly to Releases rather than Actions artifact storage.
+
+## Local development
+
 ```bash
 flutter pub get
 flutter test

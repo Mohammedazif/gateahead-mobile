@@ -4,6 +4,8 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val releaseKeystorePath = System.getenv("GATEAHEAD_ANDROID_KEYSTORE_PATH")
+
 android {
     namespace = "in.gateahead.gateahead"
     compileSdk = flutter.compileSdkVersion
@@ -29,11 +31,24 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (releaseKeystorePath != null) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storeType = "PKCS12"
+                storePassword = System.getenv("GATEAHEAD_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = "gateahead"
+                keyPassword = storePassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Local flutter run --release still works without the CI signing key.
+            signingConfig = signingConfigs.getByName(
+                if (releaseKeystorePath != null) "release" else "debug",
+            )
         }
     }
 }

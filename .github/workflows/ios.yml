@@ -1,0 +1,59 @@
+name: iPhone app
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-release
+  cancel-in-progress: false
+
+env:
+  API_BASE: ${{ vars.API_BASE || 'https://gateahead-api.onrender.com' }}
+  BYPASS_PERMISSION_LOCATION_ALWAYS: "1"
+
+jobs:
+  ipa:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check Xcode
+        run: xcodebuild -version
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.47.9"
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Analyze
+        run: flutter analyze
+      - name: Test
+        run: flutter test
+      # Sideloadly or AltStore signs this device build with the installer's Apple ID.
+      - name: Build iPhone app
+        run: |
+          flutter build ios --release --no-codesign \
+            --build-number="$GITHUB_RUN_NUMBER" \
+            --dart-define="API_BASE=$API_BASE"
+      - name: Package unsigned IPA
+        run: |
+          package_dir="$RUNNER_TEMP/gateahead-ipa"
+          mkdir -p "$package_dir/Payload" dist
+          ditto build/ios/iphoneos/Runner.app "$package_dir/Payload/Runner.app"
+          plutil -lint "$package_dir/Payload/Runner.app/Info.plist"
+          (
+            cd "$package_dir"
+            zip -qry "$GITHUB_WORKSPACE/dist/gateahead-ios-unsigned.ipa" Payload
+          )
+          unzip -t dist/gateahead-ios-unsigned.ipa
+      - name: Publish IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/publish-test-build.sh ios dist/gateahead-ios-unsigned.ipa
