@@ -459,14 +459,6 @@ class _HomePageState extends State<HomePage> {
             ),
           ],
         ),
-        Positioned(
-          top: MediaQuery.paddingOf(context).top + 8,
-          right: 12,
-          child: Text(
-            "OpenFreeMap © OpenMapTiles Data from OpenStreetMap",
-            style: TextStyle(color: colors.muted, fontSize: 11),
-          ),
-        ),
         if (rail.selected != null)
           Positioned(
             top: MediaQuery.paddingOf(context).top + 8,
