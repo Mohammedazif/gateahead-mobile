@@ -25,3 +25,5 @@ flutter:
   assets:
     - assets/india_outline.geojson
     - assets/india_rail.geojson
+    - assets/branding/gateahead-mark-dark.png
+    - assets/branding/gateahead-mark-light.png

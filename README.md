@@ -56,3 +56,7 @@ Start the API with `uvicorn gateahead.api.app:app --host 0.0.0.0 --port 8000`.
 The desktop build needs `clang`, `ninja-build`, `pkg-config`, and `libgtk-3-dev`.
 
 `API_BASE` defaults to `http://127.0.0.1:8000`.
+
+The Crossing Pin logo masters and header images are in `assets/branding/`. Android uses the matching launcher PNGs and adaptive icon resources in `android/app/src/main/res/`; iOS uses the opaque PNGs in `ios/Runner/Assets.xcassets/AppIcon.appiconset/`. Rebuild the app to update its launcher icon.
+
+The complete reusable logo kit is maintained in the frontend repository at `branding/gateahead-logo-kit/`, with an accompanying `branding/gateahead-logo-kit-v1.zip` backup. In a combined workspace it is available at `../frontend/branding/`. It includes Android/iOS icon sets, six vector variants, print formats, and raster exports from 16 to 4096px, plus scripts for other sizes. The kit's `README.md` explains each format.

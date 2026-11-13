@@ -65,11 +65,37 @@ class TrainSheet extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
                   children: [
-                    Text("CROSSINGS", style: railEyebrow(colors)),
-                    Text("GateAhead", style: text.headlineLarge),
+                    Image.asset(
+                      "assets/branding/gateahead-mark-${colors.mode == RailThemeMode.light ? 'light' : 'dark'}.png",
+                      width: 40,
+                      height: 48,
+                      fit: BoxFit.contain,
+                      excludeFromSemantics: true,
+                    ),
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("CROSSINGS", style: railEyebrow(colors)),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              "GateAhead",
+                              style: text.titleLarge?.copyWith(
+                                fontSize: 32,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: -1.2,
+                                height: 1.05,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -201,13 +227,15 @@ class TrainSheet extends StatelessWidget {
           ? "Looking up crossings…"
           : "Looking up crossings in $where…";
     }
-    if (rail.gatesNote != null) return "Crossings for this place did not load.";
-    final prefix = where == null ? "" : "$where. ";
+    final prefix = where == null ? "" : "$where · ";
+    if (rail.gatesNote != null) {
+      return "${prefix}Crossings for this place did not load.";
+    }
     if (rail.gates.isEmpty) {
       return "${prefix}No railway crossings on the map here.";
     }
     final count = rail.gates.length;
-    return "$prefix$count crossings on this map.";
+    return "$prefix$count ${count == 1 ? "crossing" : "crossings"} on this map.";
   }
 }
 

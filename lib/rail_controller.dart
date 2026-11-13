@@ -40,7 +40,6 @@ class RailController extends ChangeNotifier {
   Timer? _nameTimer;
 
   void askPlace(double lat, double lon) {
-    placeLabel = null;
     pending = Spot(lat, lon);
     spotName = null;
     naming = true;
@@ -51,7 +50,8 @@ class RailController extends ChangeNotifier {
       try {
         final name = await api.placeName(lat, lon);
         if (pending != asked) return;
-        spotName = name;
+        spotName = name?.trim();
+        if (spotName?.isEmpty ?? false) spotName = null;
       } catch (_) {
         if (pending != asked) return;
         spotName = null;
@@ -77,21 +77,25 @@ class RailController extends ChangeNotifier {
     if (next == null || _confirming) return;
     _confirming = true;
     _nameTimer?.cancel();
-    placeLabel = null;
-    pending = null;
-    notifyListeners();
+    final label = spotName;
     try {
-      await choosePlace(next.lat, next.lon);
+      await choosePlace(next.lat, next.lon, label: label);
     } finally {
       _confirming = false;
     }
   }
 
-  Future<void> choosePlace(double lat, double lon) async {
+  Future<void> choosePlace(double lat, double lon, {String? label}) async {
     final ticket = ++_generation;
     _sceneTicket += 1;
+    _nameTimer?.cancel();
+    final knownLabel = label?.trim();
+    final hasLabel = knownLabel != null && knownLabel.isNotEmpty;
     place = Spot(lat, lon);
+    placeLabel = hasLabel ? knownLabel : formatSpot(lat, lon);
     pending = null;
+    spotName = null;
+    naming = false;
     predict = null;
     checkedAt = null;
     error = null;
@@ -104,6 +108,7 @@ class RailController extends ChangeNotifier {
     loadingGates = true;
     gatesNote = null;
     notifyListeners();
+    if (!hasLabel) unawaited(_resolvePlaceLabel(lat, lon, ticket));
     try {
       final body = await api.gates(lat, lon);
       if (ticket != _generation) return;
@@ -125,6 +130,17 @@ class RailController extends ChangeNotifier {
     }
   }
 
+  Future<void> _resolvePlaceLabel(double lat, double lon, int ticket) async {
+    try {
+      final name = (await api.placeName(lat, lon))?.trim();
+      if (ticket != _generation || name == null || name.isEmpty) return;
+      placeLabel = name;
+      notifyListeners();
+    } catch (_) {
+      // Keep the coordinates when the place name is unavailable.
+    }
+  }
+
   void failLocation() {
     locating = false;
     error = "Location was blocked. Tap the map to drop a pin.";
@@ -132,12 +148,10 @@ class RailController extends ChangeNotifier {
   }
 
   void openCity(String label, double lat, double lon) {
-    placeLabel = label;
-    unawaited(choosePlace(lat, lon));
+    unawaited(choosePlace(lat, lon, label: label));
   }
 
   void beginLocate() {
-    placeLabel = null;
     locating = true;
     error = null;
     notifyListeners();
@@ -210,6 +224,9 @@ class RailController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _generation += 1;
+    _sceneTicket += 1;
+    pending = null;
     _nameTimer?.cancel();
     super.dispose();
   }
