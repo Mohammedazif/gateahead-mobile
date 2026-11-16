@@ -31,15 +31,19 @@ Predict? currentPrediction(Predict? snapshot, DateTime now) {
   for (final train in snapshot.approaching) {
     if ((train.runInfo.atStation || train.runInfo.run == "at") &&
         (train.ageMin ?? 0) + elapsed >= 8) {
-      stale.putIfAbsent(train.train, () => []).add(train);
+      stale.putIfAbsent(train.identity, () => []).add(train);
     }
   }
   if (stale.isEmpty) return snapshot;
-  final awaiting = {for (final row in snapshot.awaitingUpdate) row.number: row};
+  final awaiting = {
+    for (final row in snapshot.awaitingUpdate) row.identity: row,
+  };
   for (final entry in stale.entries) {
     final row = entry.value.first;
     awaiting[entry.key] = AwaitingTrain(
       number: row.train,
+      runId: row.runId,
+      startDate: row.startDate,
       name: row.name,
       current: row.runInfo.current.isEmpty
           ? "the station"
@@ -54,8 +58,9 @@ Predict? currentPrediction(Predict? snapshot, DateTime now) {
   return Predict(
     awaitingUpdate: awaiting.values.toList(),
     coverage: snapshot.coverage,
+    serviceUpdates: snapshot.serviceUpdates,
     gatePredictions: snapshot.gatePredictions
-        ?.where((row) => !stale.containsKey(row.train))
+        ?.where((row) => !stale.containsKey(row.identity))
         .toList(),
     error: snapshot.error,
     crossings: snapshot.crossings,
@@ -63,13 +68,13 @@ Predict? currentPrediction(Predict? snapshot, DateTime now) {
     checked: snapshot.checked,
     running: snapshot.running,
     approaching: snapshot.approaching
-        .where((row) => !stale.containsKey(row.train))
+        .where((row) => !stale.containsKey(row.identity))
         .toList(),
     passed: snapshot.passed
-        .where((row) => !stale.containsKey(row.train))
+        .where((row) => !stale.containsKey(row.identity))
         .toList(),
     sightings: snapshot.sightings
-        .where((row) => !stale.containsKey(row.number))
+        .where((row) => !stale.containsKey(row.identity))
         .toList(),
     offline: snapshot.offline,
     savedAt: snapshot.savedAt,
@@ -84,32 +89,37 @@ Scene? currentScene(Scene? snapshot, DateTime now) {
         row.movement == "stopped" && sceneReportAge(row, snapshot, now) >= 8,
   );
   if (stale.isEmpty) return snapshot;
-  final awaiting = {for (final row in snapshot.awaitingUpdate) row.number: row};
+  final awaiting = {
+    for (final row in snapshot.awaitingUpdate) row.identity: row,
+  };
   for (final row in stale) {
-    awaiting[row.number] = AwaitingTrain(
+    awaiting[row.identity] = AwaitingTrain(
       number: row.number,
+      runId: row.runId,
+      startDate: row.startDate,
       name: row.name,
       current: row.current.isEmpty ? "the station" : row.current,
       ageMin: sceneReportAge(row, snapshot, now),
       ids: {
-        ...?awaiting[row.number]?.ids,
+        ...?awaiting[row.identity]?.ids,
         if (snapshot.crossing != null) snapshot.crossing!.id,
       }.toList(),
     );
   }
-  final numbers = stale.map((row) => row.number).toSet();
+  final numbers = stale.map((row) => row.identity).toSet();
   return Scene(
     available: snapshot.available,
     awaitingUpdate: awaiting.values.toList(),
     coverage: snapshot.coverage,
+    serviceUpdates: snapshot.serviceUpdates,
     error: snapshot.error,
     crossing: snapshot.crossing,
     rail: snapshot.rail,
     trains: snapshot.trains
-        .where((row) => !numbers.contains(row.number))
+        .where((row) => !numbers.contains(row.identity))
         .toList(),
     passed: snapshot.passed
-        .where((row) => !numbers.contains(row.number))
+        .where((row) => !numbers.contains(row.identity))
         .toList(),
     offline: snapshot.offline,
     savedAt: snapshot.savedAt,
@@ -127,6 +137,9 @@ Predict? withGateChecks(
   var approaching = [...snapshot.approaching];
   var awaiting = [...snapshot.awaitingUpdate];
   var passed = [...snapshot.passed];
+  final updates = {
+    for (final row in snapshot.serviceUpdates) row.identity: row,
+  };
   final predictionAt = snapshot.savedAt ?? snapshot.generatedAt;
   for (final check in checks) {
     final crossing = check.crossing;
@@ -138,6 +151,12 @@ Predict? withGateChecks(
             (predictionAt?.millisecondsSinceEpoch ?? 0)) {
       continue;
     }
+    for (final row in check.trains) {
+      updates.remove(row.identity);
+    }
+    for (final row in check.serviceUpdates) {
+      updates[row.identity] = row;
+    }
     final gate = gates.where((row) => row.id == crossing.id).firstOrNull;
     exact = exact.where((row) => row.id != crossing.id).toList();
     exact.addAll(
@@ -145,6 +164,8 @@ Predict? withGateChecks(
         (row) => GatePrediction(
           id: crossing.id,
           train: row.number,
+          runId: row.runId,
+          startDate: row.startDate,
           eta: row.etaMin,
           closesIn: row.closesInMin,
           status: row.status,
@@ -156,7 +177,7 @@ Predict? withGateChecks(
       final ids = row.ids.where((id) => id != crossing.id).toList();
       if (ids.isEmpty) return <Approach>[];
       final remaining = exact.where(
-        (mark) => mark.train == row.train && ids.contains(mark.id),
+        (mark) => mark.identity == row.identity && ids.contains(mark.id),
       );
       final next = remaining.isEmpty
           ? null
@@ -167,6 +188,8 @@ Predict? withGateChecks(
       approaching.add(
         Approach(
           train: row.number,
+          runId: row.runId,
+          startDate: row.startDate,
           name: row.name,
           cluster: gate?.name ?? crossing.name,
           count: 1,
@@ -196,6 +219,8 @@ Predict? withGateChecks(
           : [
               AwaitingTrain(
                 number: row.number,
+                runId: row.runId,
+                startDate: row.startDate,
                 name: row.name,
                 current: row.current,
                 ageMin: row.ageMin,
@@ -207,6 +232,8 @@ Predict? withGateChecks(
       check.awaitingUpdate.map(
         (row) => AwaitingTrain(
           number: row.number,
+          runId: row.runId,
+          startDate: row.startDate,
           name: row.name,
           current: row.current,
           ageMin: row.ageMin,
@@ -222,6 +249,8 @@ Predict? withGateChecks(
           : [
               Passed(
                 train: row.train,
+                runId: row.runId,
+                startDate: row.startDate,
                 name: row.name,
                 cluster: row.cluster,
                 ago: row.ago,
@@ -233,6 +262,8 @@ Predict? withGateChecks(
       check.passed.map(
         (row) => Passed(
           train: row.number,
+          runId: row.runId,
+          startDate: row.startDate,
           name: row.name,
           cluster: gate?.name ?? crossing.name,
           ago: row.agoMin,
@@ -241,14 +272,23 @@ Predict? withGateChecks(
       ),
     );
   }
+  exact = exact.where((row) => !updates.containsKey(row.identity)).toList();
+  approaching = approaching
+      .where((row) => !updates.containsKey(row.identity))
+      .toList();
+  awaiting = awaiting
+      .where((row) => !updates.containsKey(row.identity))
+      .toList();
   final merged = <String, AwaitingTrain>{};
   for (final row in awaiting) {
-    merged[row.number] = AwaitingTrain(
+    merged[row.identity] = AwaitingTrain(
       number: row.number,
+      runId: row.runId,
+      startDate: row.startDate,
       name: row.name,
       current: row.current,
       ageMin: row.ageMin,
-      ids: {...?merged[row.number]?.ids, ...row.ids}.toList(),
+      ids: {...?merged[row.identity]?.ids, ...row.ids}.toList(),
     );
   }
   return Predict(
@@ -257,6 +297,7 @@ Predict? withGateChecks(
     awaitingUpdate: merged.values.toList(),
     passed: passed,
     coverage: snapshot.coverage,
+    serviceUpdates: updates.values.toList(),
     error: snapshot.error,
     crossings: snapshot.crossings,
     stations: snapshot.stations,
@@ -275,6 +316,8 @@ Approach _remainingApproach(
   GatePrediction? next,
 ) => Approach(
   train: row.train,
+  runId: row.runId,
+  startDate: row.startDate,
   name: row.name,
   cluster: row.cluster,
   count: ids.length,

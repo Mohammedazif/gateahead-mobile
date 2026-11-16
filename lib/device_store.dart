@@ -244,8 +244,15 @@ bool validResponseBody(String path, Map<String, dynamic> data) {
       "sightings",
       "gate_predictions",
       "awaiting_update",
+      "service_updates",
     ],
-    "/scene" => ["rail", "trains", "passed", "awaiting_update"],
+    "/scene" => [
+      "rail",
+      "trains",
+      "passed",
+      "awaiting_update",
+      "service_updates",
+    ],
     "/gates" => ["gates"],
     _ => <String>[],
   };
@@ -255,6 +262,20 @@ bool validResponseBody(String path, Map<String, dynamic> data) {
     if (rows is! List) return false;
     for (final row in rows) {
       if (row is Map && row["ids"] != null && row["ids"] is! List) return false;
+      if (row is Map) {
+        for (final key in ["run_id", "start_date"]) {
+          if (row[key] != null && row[key] is! String) return false;
+        }
+      }
+      if (field == "service_updates" &&
+          (row is! Map ||
+              row["number"] is! String ||
+              ![
+                "cancelled",
+                "diverted",
+                "partially_cancelled",
+              ].contains(row["status"])))
+        return false;
     }
   }
   return true;

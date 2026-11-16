@@ -512,6 +512,7 @@ class _CrossingDetails extends StatelessWidget {
             ),
           if (scene?.coverage?.notice case final String notice) _Notice(notice),
           _AwaitingUpdates(awaiting),
+          _OperatingUpdates(scene?.serviceUpdates ?? const []),
           if (lead != null || awaiting.isEmpty)
             Container(
               margin: const EdgeInsets.only(top: 20),
@@ -551,7 +552,10 @@ class _CrossingDetails extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   if (lead != null) ...[
-                    Text("${lead.number} ${lead.name}", style: text.bodyMedium),
+                    Text(
+                      "${lead.number} ${lead.name}${lead.startDate.isEmpty ? '' : ' · Started ${lead.startDate}'}",
+                      style: text.bodyMedium,
+                    ),
                     if (lead.movement == "stopped")
                       Text(
                         "The train was reported stopped. Movement will appear when a moving report is available.",
@@ -580,7 +584,7 @@ class _CrossingDetails extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: Text(
-                "Recently passed (estimated): ${gone.number} ${gone.name} · ${passedLabel(gone.agoMin)}",
+                "Recently passed (estimated): ${gone.number} ${gone.name}${gone.startDate.isEmpty ? '' : ' · Started ${gone.startDate}'} · ${passedLabel(gone.agoMin)}",
                 style: text.bodySmall?.copyWith(color: colors.muted),
               ),
             ),
@@ -624,7 +628,9 @@ class PredictBody extends StatelessWidget {
             if (predict.coverage?.notice case final String notice)
               _Notice(notice),
             _AwaitingUpdates(predict.awaitingUpdate),
-            if (predict.awaitingUpdate.isEmpty)
+            _OperatingUpdates(predict.serviceUpdates),
+            if (predict.awaitingUpdate.isEmpty &&
+                predict.serviceUpdates.isEmpty)
               Text(
                 "No live trains reported on this stretch right now.",
                 style: text.bodyMedium?.copyWith(color: colors.muted),
@@ -639,6 +645,7 @@ class PredictBody extends StatelessWidget {
         const SizedBox(height: 16),
         if (predict.coverage?.notice case final String notice) _Notice(notice),
         _AwaitingUpdates(predict.awaitingUpdate),
+        _OperatingUpdates(predict.serviceUpdates),
         if (grouped.isEmpty && predict.awaitingUpdate.isEmpty)
           Text(
             "No approaching train was found in the available reports. Gate position is unknown.",
@@ -647,7 +654,7 @@ class PredictBody extends StatelessWidget {
         else
           for (final entry in grouped.entries)
             _TrainBlock(
-              number: entry.key,
+              number: entry.value.first.train,
               rows: entry.value,
               otherReported: predict.awaitingUpdate.isNotEmpty,
             ),
@@ -732,7 +739,7 @@ class _TrainBlock extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  "$number ${head.name}",
+                  "$number ${head.name}${head.startDate.isEmpty ? '' : ' · Started ${head.startDate}'}",
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: text.titleSmall,
@@ -812,7 +819,7 @@ class _PassedBlock extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  "${row.train} ${row.name}",
+                  "${row.train} ${row.name}${row.startDate.isEmpty ? '' : ' · Started ${row.startDate}'}",
                   style: text.titleMedium,
                 ),
               ),
@@ -853,7 +860,7 @@ class _SightingBlock extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  "${row.number} ${row.name}",
+                  "${row.number} ${row.name}${row.startDate.isEmpty ? '' : ' · Started ${row.startDate}'}",
                   style: text.titleMedium,
                 ),
               ),
@@ -1096,7 +1103,7 @@ class CrossingTimeline extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    "${row.number} ${row.name}",
+                    "${row.number} ${row.name}${row.startDate.isEmpty ? '' : ' · Started ${row.startDate}'}",
                     style: text.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w500,
                     ),
@@ -1122,4 +1129,22 @@ class CrossingTimeline extends StatelessWidget {
       ),
     );
   }
+}
+
+class _OperatingUpdates extends StatelessWidget {
+  const _OperatingUpdates(this.updates);
+  final List<ServiceUpdate> updates;
+  @override
+  Widget build(BuildContext context) => Column(
+    children: [
+      for (final row in updates)
+        _Notice(
+          "${row.number}${row.startDate.isEmpty ? '' : ' · Started ${row.startDate}'} · ${row.status == 'cancelled'
+              ? 'Cancelled'
+              : row.status == 'diverted'
+              ? 'Diverted'
+              : 'Partially cancelled'}${row.status == 'cancelled' ? '' : ' · Crossing timing is unavailable until this journey’s route is confirmed.'}",
+        ),
+    ],
+  );
 }

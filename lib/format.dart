@@ -259,7 +259,7 @@ List<Gate> shownGates(List<Gate> gates) {
 Map<String, List<Approach>> groupApproaches(List<Approach> rows) {
   final grouped = <String, List<Approach>>{};
   for (final row in rows) {
-    grouped.putIfAbsent(row.train, () => []).add(row);
+    grouped.putIfAbsent(row.identity, () => []).add(row);
   }
   for (final list in grouped.values) {
     list.sort((a, b) => a.eta.compareTo(b.eta));
@@ -269,14 +269,14 @@ Map<String, List<Approach>> groupApproaches(List<Approach> rows) {
 
 List<Sighting> lineSightings(Predict predict) {
   final shown = {
-    ...predict.approaching.map((row) => row.train),
-    ...predict.passed.map((row) => row.train),
-    ...predict.awaitingUpdate.map((row) => row.number),
+    ...predict.approaching.map((row) => row.identity),
+    ...predict.passed.map((row) => row.identity),
+    ...predict.awaitingUpdate.map((row) => row.identity),
   };
   return predict.sightings
       .where(
         (row) =>
-            row.age < 45 && !row.passedLocal && !shown.contains(row.number),
+            row.age < 45 && !row.passedLocal && !shown.contains(row.identity),
       )
       .take(6)
       .toList();

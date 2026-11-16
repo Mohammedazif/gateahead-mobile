@@ -119,6 +119,8 @@ class RunInfo {
 
 class Approach {
   const Approach({
+    this.runId = "",
+    this.startDate = "",
     required this.train,
     required this.name,
     required this.cluster,
@@ -154,12 +156,21 @@ class Approach {
   /// Estimated minutes until the barrier comes down; zero or less predicts closure. Null from an older API.
   final double? closesIn;
 
+  final String runId, startDate;
+  String get identity => runId.isNotEmpty
+      ? runId
+      : startDate.isNotEmpty
+      ? "${train}:$startDate"
+      : train;
+
   static Approach? tryParse(Object? raw) {
     if (raw is! Map) return null;
     final json = _map(raw);
     final eta = _maybeNum(json["eta"]);
     if (eta == null) return null;
     return Approach(
+      runId: _str(raw["run_id"]),
+      startDate: _str(raw["start_date"]),
       train: _str(json["train"]),
       name: _str(json["name"]),
       cluster: _str(json["cluster"]),
@@ -182,6 +193,8 @@ class Approach {
 /// A train that went over a crossing near you in the last few minutes.
 class Passed {
   const Passed({
+    this.runId = "",
+    this.startDate = "",
     required this.train,
     required this.name,
     required this.cluster,
@@ -195,12 +208,21 @@ class Passed {
   final double ago;
   final List<String> ids;
 
+  final String runId, startDate;
+  String get identity => runId.isNotEmpty
+      ? runId
+      : startDate.isNotEmpty
+      ? "${train}:$startDate"
+      : train;
+
   static Passed? tryParse(Object? raw) {
     if (raw is! Map) return null;
     final json = _map(raw);
     final ago = _maybeNum(json["ago"]);
     if (ago == null) return null;
     return Passed(
+      runId: _str(raw["run_id"]),
+      startDate: _str(raw["start_date"]),
       train: _str(json["train"]),
       name: _str(json["name"]),
       cluster: _str(json["cluster"]),
@@ -212,6 +234,8 @@ class Passed {
 
 class Sighting {
   const Sighting({
+    this.runId = "",
+    this.startDate = "",
     required this.number,
     required this.name,
     required this.age,
@@ -227,10 +251,19 @@ class Sighting {
   final RunInfo runInfo;
   final double? eta;
 
+  final String runId, startDate;
+  String get identity => runId.isNotEmpty
+      ? runId
+      : startDate.isNotEmpty
+      ? "${number}:$startDate"
+      : number;
+
   static Sighting? tryParse(Object? raw) {
     if (raw is! Map) return null;
     final json = _map(raw);
     return Sighting(
+      runId: _str(raw["run_id"]),
+      startDate: _str(raw["start_date"]),
       number: _str(json["number"]),
       name: _str(json["name"]),
       age: _maybeNum(json["age"]) ?? 0,
@@ -243,6 +276,8 @@ class Sighting {
 
 class GatePrediction {
   const GatePrediction({
+    this.runId = "",
+    this.startDate = "",
     required this.id,
     required this.eta,
     required this.status,
@@ -252,11 +287,20 @@ class GatePrediction {
   final String id, status, train;
   final double eta;
   final double? closesIn;
+  final String runId, startDate;
+  String get identity => runId.isNotEmpty
+      ? runId
+      : startDate.isNotEmpty
+      ? "${train}:$startDate"
+      : train;
+
   static GatePrediction? tryParse(Object? raw) {
     if (raw is! Map) return null;
     final eta = _maybeNum(raw["eta"]), id = raw["id"];
     if (eta == null || id is! String) return null;
     return GatePrediction(
+      runId: _str(raw["run_id"]),
+      startDate: _str(raw["start_date"]),
       id: id,
       eta: eta,
       status: _str(raw["status"]),
@@ -268,6 +312,8 @@ class GatePrediction {
 
 class AwaitingTrain {
   const AwaitingTrain({
+    this.runId = "",
+    this.startDate = "",
     required this.number,
     required this.name,
     required this.current,
@@ -278,9 +324,18 @@ class AwaitingTrain {
   final double ageMin;
   final List<String> ids;
 
+  final String runId, startDate;
+  String get identity => runId.isNotEmpty
+      ? runId
+      : startDate.isNotEmpty
+      ? "${number}:$startDate"
+      : number;
+
   static AwaitingTrain? tryParse(Object? raw) {
     if (raw is! Map || raw["number"] is! String) return null;
     return AwaitingTrain(
+      runId: _str(raw["run_id"]),
+      startDate: _str(raw["start_date"]),
       number: raw["number"],
       name: _str(raw["name"]),
       current: _str(raw["current"]),
@@ -340,6 +395,7 @@ class TrainCoverage {
 
 class Predict {
   const Predict({
+    this.serviceUpdates = const [],
     this.awaitingUpdate = const [],
     this.coverage,
     this.gatePredictions,
@@ -359,6 +415,7 @@ class Predict {
   final List<GatePrediction>? gatePredictions;
   final List<AwaitingTrain> awaitingUpdate;
   final TrainCoverage? coverage;
+  final List<ServiceUpdate> serviceUpdates;
   final bool offline;
   final DateTime? savedAt;
   final DateTime? generatedAt;
@@ -374,6 +431,10 @@ class Predict {
 
   static Predict parse(Map<String, dynamic> json) {
     return Predict(
+      serviceUpdates: [
+        for (final row in (json["service_updates"] as List?) ?? const [])
+          ?ServiceUpdate.tryParse(row),
+      ],
       awaitingUpdate: [
         for (final row in (json["awaiting_update"] as List?) ?? const [])
           ?AwaitingTrain.tryParse(row),
@@ -416,6 +477,8 @@ class Predict {
 
 class SceneTrain {
   const SceneTrain({
+    this.runId = "",
+    this.startDate = "",
     required this.number,
     required this.name,
     required this.etaMin,
@@ -445,10 +508,19 @@ class SceneTrain {
   /// Estimated minutes until the barrier comes down; zero or less predicts closure. Null from an older API.
   final double? closesInMin;
 
+  final String runId, startDate;
+  String get identity => runId.isNotEmpty
+      ? runId
+      : startDate.isNotEmpty
+      ? "${number}:$startDate"
+      : number;
+
   static SceneTrain? tryParse(Object? raw) {
     if (raw is! Map) return null;
     final json = _map(raw);
     return SceneTrain(
+      runId: _str(raw["run_id"]),
+      startDate: _str(raw["start_date"]),
       positionOnSegment: json["position_on_segment"] == true,
       number: _str(json["number"]),
       name: _str(json["name"]),
@@ -496,6 +568,7 @@ class SceneCrossing {
 
 class Scene {
   const Scene({
+    this.serviceUpdates = const [],
     this.awaitingUpdate = const [],
     this.coverage,
     required this.available,
@@ -508,6 +581,7 @@ class Scene {
     this.savedAt,
   });
 
+  final List<ServiceUpdate> serviceUpdates;
   final bool offline;
   final List<AwaitingTrain> awaitingUpdate;
   final TrainCoverage? coverage;
@@ -532,6 +606,10 @@ class Scene {
       rail.add(Spot(lat, lon));
     }
     return Scene(
+      serviceUpdates: [
+        for (final row in (json["service_updates"] as List?) ?? const [])
+          ?ServiceUpdate.tryParse(row),
+      ],
       awaitingUpdate: [
         for (final row in (json["awaiting_update"] as List?) ?? const [])
           ?AwaitingTrain.tryParse(row),
@@ -559,6 +637,8 @@ class Scene {
 
 class ScenePassed {
   const ScenePassed({
+    this.runId = "",
+    this.startDate = "",
     required this.number,
     required this.name,
     required this.agoMin,
@@ -568,12 +648,21 @@ class ScenePassed {
   final String name;
   final double agoMin;
 
+  final String runId, startDate;
+  String get identity => runId.isNotEmpty
+      ? runId
+      : startDate.isNotEmpty
+      ? "${number}:$startDate"
+      : number;
+
   static ScenePassed? tryParse(Object? raw) {
     if (raw is! Map) return null;
     final json = _map(raw);
     final ago = _maybeNum(json["ago_min"]);
     if (ago == null) return null;
     return ScenePassed(
+      runId: _str(raw["run_id"]),
+      startDate: _str(raw["start_date"]),
       number: _str(json["number"]),
       name: _str(json["name"]),
       agoMin: ago,
@@ -629,4 +718,22 @@ DateTime? _timestamp(Object? value) {
   final seconds = _maybeNum(value);
   if (seconds == null || !seconds.isFinite) return null;
   return DateTime.fromMillisecondsSinceEpoch((seconds * 1000).round());
+}
+
+class ServiceUpdate {
+  const ServiceUpdate({
+    required this.number,
+    required this.startDate,
+    required this.status,
+  });
+  final String number, startDate, status;
+  String get identity => startDate.isEmpty ? number : "$number:$startDate";
+  static ServiceUpdate? tryParse(Object? raw) {
+    if (raw is! Map || raw["number"] is! String) return null;
+    return ServiceUpdate(
+      number: raw["number"],
+      startDate: _str(raw["start_date"]),
+      status: _str(raw["status"]),
+    );
+  }
 }
