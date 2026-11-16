@@ -48,6 +48,8 @@ flutter run --dart-define=API_BASE=http://10.0.2.2:8000
 
 Start the API with `uvicorn gateahead.api.app:app --host 0.0.0.0 --port 8000`.
 
+On Linux sandboxes with a read-only Flutter SDK or blocked local sockets, run `python3 tools/check-sandboxed.py`. It compiles every test with the installed SDK, uses Flutter's standalone test runner, and analyzes the app and tests through the cached analyzer. Dependencies must already be installed; it downloads nothing and writes temporary compiler output under `/tmp`. Pass `--flutter-root /path/to/flutter` if Flutter is not on `PATH`.
+
 - This Linux desktop: `flutter run -d linux --dart-define=API_BASE=http://127.0.0.1:8000`
 - Android emulator: `http://10.0.2.2:8000`
 - iOS simulator: `http://127.0.0.1:8000`

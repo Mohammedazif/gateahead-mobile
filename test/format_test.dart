@@ -111,12 +111,24 @@ void main() {
     expect(gateLabel(12, 7), "closes in 7 min");
     expect(gateLabel(5.6, 0.6), "closing now");
     expect(gateLabel(4, -1), "closed · train in 4 min");
-    expect(gateLabel(0.5, -4.5), "closed · train passing");
+    expect(gateLabel(0.5, -4.5), "closed · train due within 1 min");
     expect(gateLabel(119.8, 119.8), "closes in 2 hr");
     expect(passedLabel(0.4), "passed just now");
     expect(passedLabel(2.6), "passed 3 min ago");
     expect(labelStatus("passed"), "Passed");
   });
+
+  test(
+    "an uncertain inferred approach cannot claim that the barrier is closed",
+    () {
+      expect(gateLabel(2.3, -2.7, "approaching"), "train timing uncertain");
+      expect(gateLabel(0.5, -4.5, "approaching"), "train timing uncertain");
+      expect(gateLabel(4, -1, "closed"), "closed · train in 4 min");
+      expect(gateLabel(0, -5, "closed"), "closed · train passing");
+      expect(gateLabel(0.5, -4.5, "closed"), "closed · train due within 1 min");
+      expect(gateLabel(4, -1), "closed · train in 4 min");
+    },
+  );
 
   test(
     "a just-passed train is listed once and the gate keeps its barrier time",

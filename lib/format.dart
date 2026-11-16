@@ -73,11 +73,14 @@ String delayClass(int minutes) {
 ///
 /// [eta] is minutes until the train reaches the crossing; [closesIn] is minutes until the barrier
 /// comes down (zero or less: down now). An older API without [closesIn] counts down to the train.
-String gateLabel(double eta, [double? closesIn]) {
+String gateLabel(double eta, [double? closesIn, String? status]) {
   final downIn = closesIn ?? eta;
+  if (status == "approaching" && downIn <= 0) return "train timing uncertain";
   if (downIn <= 0) {
-    return eta <= 1
+    return eta <= 0
         ? "closed · train passing"
+        : eta < 1
+        ? "closed · train due within 1 min"
         : "closed · train in ${eta.round()} min";
   }
   if (downIn < 1) return "closing now";
@@ -165,8 +168,16 @@ RunCopy runCopy(RunInfo row, {bool showDelay = false}) {
   );
 }
 
-List<Gate> markGates(List<Gate> gates, Predict? predict) {
+List<Gate> markGates(
+  List<Gate> gates,
+  Predict? predict, [
+  List<Scene> checked = const [],
+]) {
   final marks = <String, GatePrediction>{};
+  final uncertain = {
+    for (final train in predict?.awaitingUpdate ?? const <AwaitingTrain>[])
+      ...train.ids,
+  };
   final rows =
       predict?.gatePredictions ??
       [
@@ -183,6 +194,34 @@ List<Gate> markGates(List<Gate> gates, Predict? predict) {
     final previous = marks[row.id];
     if (previous == null || row.eta < previous.eta) marks[row.id] = row;
   }
+  for (final scene in checked) {
+    final id = scene.crossing?.id;
+    if (id == null ||
+        !scene.available ||
+        scene.offline ||
+        scene.error.isNotEmpty ||
+        (scene.savedAt?.millisecondsSinceEpoch ?? 0) <
+            (predict?.savedAt?.millisecondsSinceEpoch ??
+                predict?.generatedAt?.millisecondsSinceEpoch ??
+                0)) {
+      continue;
+    }
+    marks.remove(id);
+    uncertain.remove(id);
+    if (scene.awaitingUpdate.isNotEmpty) uncertain.add(id);
+    for (final train in scene.trains) {
+      final old = marks[id];
+      if (old == null || train.etaMin < old.eta) {
+        marks[id] = GatePrediction(
+          id: id,
+          train: train.number,
+          eta: train.etaMin,
+          closesIn: train.closesInMin,
+          status: train.status,
+        );
+      }
+    }
+  }
   return [
     for (final gate in gates)
       Gate(
@@ -192,25 +231,28 @@ List<Gate> markGates(List<Gate> gates, Predict? predict) {
         lon: gate.lon,
         km: gate.km,
         source: gate.source,
-        status: marks[gate.id]?.status,
-        eta: marks[gate.id]?.eta,
-        closesIn: marks[gate.id]?.closesIn,
+        status: uncertain.contains(gate.id)
+            ? "uncertain"
+            : marks[gate.id]?.status,
+        eta: uncertain.contains(gate.id) ? null : marks[gate.id]?.eta,
+        closesIn: uncertain.contains(gate.id) ? null : marks[gate.id]?.closesIn,
       ),
   ];
 }
 
 List<Gate> shownGates(List<Gate> gates) {
+  bool active(Gate gate) => gate.eta != null || gate.status == "uncertain";
   final ranked = [...gates]
     ..sort((a, b) {
-      final hot = (a.eta == null ? 1 : 0).compareTo(b.eta == null ? 1 : 0);
+      final hot = (active(a) ? 0 : 1).compareTo(active(b) ? 0 : 1);
       if (hot != 0) return hot;
       if (a.eta != null && b.eta != null && a.eta != b.eta) {
         return a.eta!.compareTo(b.eta!);
       }
       return a.km.compareTo(b.km);
     });
-  final hot = ranked.where((gate) => gate.eta != null);
-  final rest = ranked.where((gate) => gate.eta == null).take(12);
+  final hot = ranked.where(active);
+  final rest = ranked.where((gate) => !active(gate)).take(12);
   return [...hot, ...rest];
 }
 
@@ -229,6 +271,7 @@ List<Sighting> lineSightings(Predict predict) {
   final shown = {
     ...predict.approaching.map((row) => row.train),
     ...predict.passed.map((row) => row.train),
+    ...predict.awaitingUpdate.map((row) => row.number),
   };
   return predict.sightings
       .where(

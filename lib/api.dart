@@ -59,6 +59,8 @@ class HttpRailApi implements RailApi, CommunityApi {
   final String base;
   final DeviceStore? storage;
   final http.Client _client;
+  final Map<String, _CacheWrites> _cacheWrites = {};
+  int _requestVersion = 0;
 
   @override
   Future<List<CityHit>> cities(String query) async {
@@ -177,6 +179,26 @@ class HttpRailApi implements RailApi, CommunityApi {
     Map<String, String> query,
     Duration timeout,
   ) async {
+    final key = Uri(path: path, queryParameters: query).toString();
+    final pending = ["/gates", "/predict", "/scene"].contains(path)
+        ? _cacheWrites.putIfAbsent(key, _CacheWrites.new)
+        : null;
+    final version = ++_requestVersion;
+    if (pending != null) pending.count++;
+    try {
+      return await _getResponse(path, query, timeout, pending, version);
+    } finally {
+      if (pending != null && --pending.count == 0) _cacheWrites.remove(key);
+    }
+  }
+
+  Future<Map<String, dynamic>> _getResponse(
+    String path,
+    Map<String, String> query,
+    Duration timeout,
+    _CacheWrites? pending,
+    int version,
+  ) async {
     final root = base.endsWith("/") ? base.substring(0, base.length - 1) : base;
     final uri = Uri.parse("$root$path").replace(queryParameters: query);
     final cacheable = ["/gates", "/predict", "/scene"].contains(path);
@@ -195,14 +217,14 @@ class HttpRailApi implements RailApi, CommunityApi {
         DateTime.now().difference(saved.at).inSeconds < 90) {
       return {...saved.data, "_saved_at": saved.at.millisecondsSinceEpoch};
     }
-    final pausedUntil = storage?.read("paused-until");
+    final pausedUntil = storedDateTime(storage?.read("paused-until"));
     if (["/predict", "/scene"].contains(path) &&
-        pausedUntil is int &&
-        pausedUntil > DateTime.now().millisecondsSinceEpoch) {
+        pausedUntil != null &&
+        pausedUntil.isAfter(DateTime.now())) {
       if (saved != null) return saved.restored();
       throw RailException(
         "Checks are paused. Try again in a few minutes.",
-        retryAt: DateTime.fromMillisecondsSinceEpoch(pausedUntil),
+        retryAt: pausedUntil,
       );
     }
     late http.Response response;
@@ -232,13 +254,28 @@ class HttpRailApi implements RailApi, CommunityApi {
         "Could not reach the service at $base. Try again in a moment.",
       );
     }
-    final decoded = jsonDecode(response.body);
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(response.body);
+    } on FormatException {
+      if (saved != null) return saved.restored();
+      throw RailException(
+        "The service returned invalid data. Try again in a moment.",
+      );
+    }
     if (decoded is! Map) {
+      if (saved != null) return saved.restored();
       throw RailException(
         "Could not reach the service at $base. Try again in a moment.",
       );
     }
     final data = decoded.map((key, value) => MapEntry(key.toString(), value));
+    if (cacheable && !validResponseBody(path, data)) {
+      if (saved != null) return saved.restored();
+      throw RailException(
+        "The service returned invalid data. Try again in a moment.",
+      );
+    }
     if (cacheable &&
         saved != null &&
         data["error"] != null &&
@@ -246,9 +283,18 @@ class HttpRailApi implements RailApi, CommunityApi {
       return saved.restored();
     }
     if (cacheable && (data["error"] == null || data["error"] == "")) {
-      final at = await storage?.saveResponse(key, data) ?? DateTime.now();
+      var at = DateTime.now();
+      if (pending != null && version >= pending.storedVersion) {
+        pending.storedVersion = version;
+        at = await storage?.saveResponse(key, data) ?? at;
+      }
       return {...data, "_saved_at": at.millisecondsSinceEpoch};
     }
     return data;
   }
+}
+
+class _CacheWrites {
+  int count = 0;
+  int storedVersion = 0;
 }

@@ -85,7 +85,7 @@ class _TrainSheetState extends State<TrainSheet> {
   Widget build(BuildContext context) {
     final colors = RailColors.of(context);
     final text = Theme.of(context).textTheme;
-    final gates = markGates(rail.gates, rail.historical ? null : rail.predict);
+    final gates = rail.markedGates;
     final shown = shownGates(gates);
     final horizontal = widget.docked ? 22.0 : 18.0;
     return DecoratedBox(
@@ -102,253 +102,259 @@ class _TrainSheetState extends State<TrainSheet> {
               : BorderSide.none,
         ),
       ),
-      child: Column(
-        children: [
-          if (!widget.docked)
-            Semantics(
-              label: "Expand or collapse panel",
-              button: true,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: widget.onExpand,
-                onVerticalDragUpdate: widget.onResize == null
-                    ? null
-                    : (details) => widget.onResize!(details.delta.dy),
-                child: SizedBox(
-                  height: 22,
-                  width: double.infinity,
-                  child: Center(
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: colors.muted.withValues(alpha: .45),
-                        borderRadius: BorderRadius.circular(99),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          children: [
+            if (!widget.docked)
+              Semantics(
+                label: "Expand or collapse panel",
+                button: true,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onExpand,
+                  onVerticalDragUpdate: widget.onResize == null
+                      ? null
+                      : (details) => widget.onResize!(details.delta.dy),
+                  child: SizedBox(
+                    height: 22,
+                    width: double.infinity,
+                    child: Center(
+                      child: Container(
+                        width: 36,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: colors.muted.withValues(alpha: .45),
+                          borderRadius: BorderRadius.circular(99),
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-          Padding(
-            padding: EdgeInsets.fromLTRB(
-              horizontal,
-              widget.docked ? 22 : 0,
-              horizontal,
-              8,
-            ),
-            child: Row(
-              children: [
-                Image.asset(
-                  "assets/branding/gateahead-mark-${colors.mode == RailThemeMode.light ? 'light' : 'dark'}.png",
-                  width: 28,
-                  height: 34,
-                  excludeFromSemantics: true,
-                ),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: Text(
-                    "GateAhead",
-                    style: text.titleLarge?.copyWith(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: -1,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: "Open settings",
-                  onPressed: () => showRailSettings(context, rail),
-                  icon: const Icon(Icons.tune, size: 21),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: horizontal),
-            child: Row(
-              children: [
-                for (final tab in _SheetTab.values)
-                  Expanded(
-                    child: Semantics(
-                      selected: _tab == tab,
-                      child: TextButton(
-                        onPressed: () => _changeTab(tab),
-                        style: TextButton.styleFrom(
-                          foregroundColor: _tab == tab
-                              ? colors.accent
-                              : colors.muted,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            vertical: 12,
-                            horizontal: 4,
-                          ),
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(switch (tab) {
-                                  _SheetTab.nearby =>
-                                    Icons.location_on_outlined,
-                                  _SheetTab.trains => Icons.train_outlined,
-                                  _SheetTab.saved => Icons.bookmark_border,
-                                }, size: 18),
-                                const SizedBox(width: 6),
-                                Text(switch (tab) {
-                                  _SheetTab.nearby => "Nearby",
-                                  _SheetTab.trains => "Trains",
-                                  _SheetTab.saved => "Saved",
-                                }),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Container(
-                              height: 2,
-                              color: _tab == tab
-                                  ? colors.amber
-                                  : Colors.transparent,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          Divider(height: 1, color: colors.line),
-          Expanded(
-            child: ListView(
-              controller: widget.scroll,
+            Padding(
               padding: EdgeInsets.fromLTRB(
                 horizontal,
-                20,
+                widget.docked ? 22 : 0,
                 horizontal,
-                24 + MediaQuery.paddingOf(context).bottom,
+                8,
               ),
-              children: [
-                if (rail.selected != null)
-                  _CrossingDetails(
-                    rail: rail,
-                    onBack: () {
-                      rail.closeScene();
-                      setState(() => _tab = _SheetTab.nearby);
-                    },
-                  )
-                else ...[
-                  if (_tab == _SheetTab.nearby) ...[
-                    _PanelHeading(
-                      title: "Nearby crossings",
-                      action: rail.place == null
-                          ? null
-                          : TextButton(
-                              onPressed: rail.checking
-                                  ? null
-                                  : () {
-                                      setState(() => _tab = _SheetTab.trains);
-                                      rail.check();
-                                    },
-                              child: Text(
-                                rail.checking ? "Checking…" : "Check trains",
-                              ),
+              child: Row(
+                children: [
+                  Image.asset(
+                    "assets/branding/gateahead-mark-${colors.mode == RailThemeMode.light ? 'light' : 'dark'}.png",
+                    width: 28,
+                    height: 34,
+                    excludeFromSemantics: true,
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      "GateAhead",
+                      style: text.titleLarge?.copyWith(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -1,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: "Open settings",
+                    onPressed: () => showRailSettings(context, rail),
+                    icon: const Icon(Icons.tune, size: 21),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: horizontal),
+              child: Row(
+                children: [
+                  for (final tab in _SheetTab.values)
+                    Expanded(
+                      child: Semantics(
+                        selected: _tab == tab,
+                        child: TextButton(
+                          onPressed: () => _changeTab(tab),
+                          style: TextButton.styleFrom(
+                            foregroundColor: _tab == tab
+                                ? colors.accent
+                                : colors.muted,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _lede(rail),
-                      style: text.bodyMedium?.copyWith(
-                        color: colors.muted,
-                        height: 1.5,
-                      ),
-                    ),
-                    if (rail.gatesCached)
-                      const _Notice(
-                        "Saved crossing locations · map tiles need a connection.",
-                      ),
-                    if (rail.gatesNote != null) _Notice(rail.gatesNote!),
-                    if (rail.place == null)
-                      _EmptyState(
-                        icon: Icons.location_on_outlined,
-                        title: "Start with a place",
-                        message: "Find your city or choose a point on the map.",
-                        action: TextButton(
-                          onPressed: () => showLocationSearch(
-                            context,
-                            rail,
-                            widget.onLocate,
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 12,
+                              horizontal: 4,
+                            ),
                           ),
-                          child: const Text("Choose a place"),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(switch (tab) {
+                                    _SheetTab.nearby =>
+                                      Icons.location_on_outlined,
+                                    _SheetTab.trains => Icons.train_outlined,
+                                    _SheetTab.saved => Icons.bookmark_border,
+                                  }, size: 18),
+                                  const SizedBox(width: 6),
+                                  Text(switch (tab) {
+                                    _SheetTab.nearby => "Nearby",
+                                    _SheetTab.trains => "Trains",
+                                    _SheetTab.saved => "Saved",
+                                  }),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                height: 2,
+                                color: _tab == tab
+                                    ? colors.amber
+                                    : Colors.transparent,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    if (shown.isNotEmpty) ...[
-                      const SizedBox(height: 18),
-                      for (final gate in shown) ...[
-                        _GateRow(
-                          gate: gate,
-                          selected: gate.id == rail.selected?.id,
-                          onTap: () => rail.openGate(gate),
+                    ),
+                ],
+              ),
+            ),
+            Divider(height: 1, color: colors.line),
+            Expanded(
+              child: ListView(
+                controller: widget.scroll,
+                padding: EdgeInsets.fromLTRB(
+                  horizontal,
+                  20,
+                  horizontal,
+                  24 + MediaQuery.paddingOf(context).bottom,
+                ),
+                children: [
+                  if (rail.selected != null)
+                    _CrossingDetails(
+                      rail: rail,
+                      onBack: () {
+                        rail.closeScene();
+                        setState(() => _tab = _SheetTab.nearby);
+                      },
+                    )
+                  else ...[
+                    if (_tab == _SheetTab.nearby) ...[
+                      _PanelHeading(
+                        title: "Nearby crossings",
+                        action: rail.place == null
+                            ? null
+                            : TextButton(
+                                onPressed: rail.checking
+                                    ? null
+                                    : () {
+                                        setState(() => _tab = _SheetTab.trains);
+                                        rail.check();
+                                      },
+                                child: Text(
+                                  rail.checking ? "Checking…" : "Check trains",
+                                ),
+                              ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _lede(rail),
+                        style: text.bodyMedium?.copyWith(
+                          color: colors.muted,
+                          height: 1.5,
                         ),
-                        const SizedBox(height: 10),
+                      ),
+                      if (rail.gatesCached)
+                        const _Notice(
+                          "Saved crossing locations · map tiles need a connection.",
+                        ),
+                      if (rail.gatesNote != null) _Notice(rail.gatesNote!),
+                      if (rail.place == null)
+                        _EmptyState(
+                          icon: Icons.location_on_outlined,
+                          title: "Start with a place",
+                          message:
+                              "Find your city or choose a point on the map.",
+                          action: TextButton(
+                            onPressed: () => showLocationSearch(
+                              context,
+                              rail,
+                              widget.onLocate,
+                            ),
+                            child: const Text("Choose a place"),
+                          ),
+                        ),
+                      if (shown.isNotEmpty) ...[
+                        const SizedBox(height: 18),
+                        for (final gate in shown) ...[
+                          _GateRow(
+                            gate: gate,
+                            selected: gate.id == rail.selected?.id,
+                            onTap: () => rail.openGate(gate),
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                        if (gates.length > shown.length)
+                          Text(
+                            "${gates.length - shown.length} more crossings are marked on the map.",
+                            style: text.bodySmall?.copyWith(
+                              color: colors.muted,
+                            ),
+                          ),
                       ],
-                      if (gates.length > shown.length)
-                        Text(
-                          "${gates.length - shown.length} more crossings are marked on the map.",
-                          style: text.bodySmall?.copyWith(color: colors.muted),
+                    ],
+                    if (_tab == _SheetTab.trains) ...[
+                      _PanelHeading(
+                        title: "On this stretch",
+                        action: FilledButton(
+                          onPressed: rail.place == null || rail.checking
+                              ? null
+                              : () => rail.check(),
+                          child: Text(
+                            rail.checking ? "Checking…" : "Check trains",
+                          ),
+                        ),
+                      ),
+                      if (rail.checkedAt != null && !rail.historical)
+                        CheckedAgo(at: rail.checkedAt!),
+                      if (rail.historical)
+                        _Notice(
+                          "Saved check · ${rail.checkedAt?.toLocal()}. Timings may have changed.",
+                        ),
+                      if (rail.predict != null)
+                        PredictBody(predict: rail.predict!)
+                      else
+                        _EmptyState(
+                          icon: Icons.train_outlined,
+                          title: rail.place == null
+                              ? "Choose an area first"
+                              : "See what’s on the line",
+                          message: rail.place == null
+                              ? "Use the search above the map to find your crossings."
+                              : "Check trains for approaching services and estimated crossing times.",
                         ),
                     ],
-                  ],
-                  if (_tab == _SheetTab.trains) ...[
-                    _PanelHeading(
-                      title: "On this stretch",
-                      action: FilledButton(
-                        onPressed: rail.place == null || rail.checking
-                            ? null
-                            : () => rail.check(),
-                        child: Text(
-                          rail.checking ? "Checking…" : "Check trains",
-                        ),
+                    if (_tab == _SheetTab.saved) ...[
+                      const _PanelHeading(title: "Saved gates"),
+                      const SizedBox(height: 8),
+                      Text(
+                        "A shortcut to the crossings you use most.",
+                        style: text.bodyMedium?.copyWith(color: colors.muted),
                       ),
-                    ),
-                    if (rail.checkedAt != null && !rail.historical)
-                      CheckedAgo(at: rail.checkedAt!),
-                    if (rail.historical)
-                      _Notice(
-                        "Saved check · ${rail.checkedAt?.toLocal()}. Timings may have changed.",
-                      ),
-                    if (rail.predict != null)
-                      PredictBody(predict: rail.predict!)
-                    else
-                      _EmptyState(
-                        icon: Icons.train_outlined,
-                        title: rail.place == null
-                            ? "Choose an area first"
-                            : "See what’s on the line",
-                        message: rail.place == null
-                            ? "Use the search above the map to find your crossings."
-                            : "Check trains for approaching services and estimated crossing times.",
-                      ),
+                      SavedGateControls(rail: rail),
+                    ],
+                    if (rail.error != null && _tab != _SheetTab.saved)
+                      _Notice(rail.error!),
                   ],
-                  if (_tab == _SheetTab.saved) ...[
-                    const _PanelHeading(title: "Saved gates"),
-                    const SizedBox(height: 8),
-                    Text(
-                      "A shortcut to the crossings you use most.",
-                      style: text.bodyMedium?.copyWith(color: colors.muted),
-                    ),
-                    SavedGateControls(rail: rail),
-                  ],
-                  if (rail.error != null && _tab != _SheetTab.saved)
-                    _Notice(rail.error!),
                 ],
-              ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -447,6 +453,17 @@ class _Notice extends StatelessWidget {
   }
 }
 
+class _AwaitingUpdates extends StatelessWidget {
+  const _AwaitingUpdates(this.trains);
+  final List<AwaitingTrain> trains;
+  @override
+  Widget build(BuildContext context) => trains.isEmpty
+      ? const SizedBox.shrink()
+      : _Notice(
+          "Position update needed\n${trains.map((train) => '${train.number} ${train.name} · last reported stopped at ${train.current}, report ${train.ageMin.round()} min old').join('\n')}\nPassage has not been confirmed. The barrier’s position is unknown.",
+        );
+}
+
 class _CrossingDetails extends StatelessWidget {
   const _CrossingDetails({required this.rail, required this.onBack});
   final RailController rail;
@@ -455,6 +472,7 @@ class _CrossingDetails extends StatelessWidget {
   Widget build(BuildContext context) {
     final gate = rail.selected!, scene = rail.scene;
     final lead = scene?.trains.firstOrNull, gone = scene?.passed.firstOrNull;
+    final awaiting = scene?.awaitingUpdate ?? const <AwaitingTrain>[];
     final colors = RailColors.of(context), text = Theme.of(context).textTheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -492,58 +510,72 @@ class _CrossingDetails extends StatelessWidget {
             _Notice(
               "Saved view · ${scene?.savedAt?.toLocal()}. Timings describe that check.",
             ),
-          Container(
-            margin: const EdgeInsets.only(top: 20),
-            padding: const EdgeInsets.all(18),
-            width: double.infinity,
-            decoration: BoxDecoration(
-              border: Border.all(
-                color: lead == null ? colors.line : colors.accent,
+          if (scene?.coverage?.notice case final String notice) _Notice(notice),
+          _AwaitingUpdates(awaiting),
+          if (lead != null || awaiting.isEmpty)
+            Container(
+              margin: const EdgeInsets.only(top: 20),
+              padding: const EdgeInsets.all(18),
+              width: double.infinity,
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: lead == null ? colors.line : colors.accent,
+                ),
+                borderRadius: BorderRadius.circular(16),
               ),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  rail.sceneHistorical
-                      ? "AT LAST CHECK · ESTIMATE"
-                      : gone != null
-                      ? "NEXT APPROACHING TRAIN · ESTIMATE"
-                      : "ESTIMATED BARRIER TIMING",
-                  style: railEyebrow(colors),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  lead == null
-                      ? "No approaching train reported"
-                      : lead.etaMin <= 1 && !lead.positionOnSegment
-                      ? "Estimated passing window"
-                      : gateLabel(lead.etaMin, lead.closesInMin),
-                  style: text.titleLarge?.copyWith(fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(height: 10),
-                if (lead != null) ...[
-                  Text("${lead.number} ${lead.name}", style: text.bodyMedium),
-                  const SizedBox(height: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    "Train report ${lead.ageMin.round()} min old at check",
-                    style: text.bodySmall?.copyWith(color: colors.muted),
+                    rail.sceneHistorical
+                        ? "AT LAST CHECK · ESTIMATE"
+                        : awaiting.isNotEmpty
+                        ? "OTHER REPORTED TRAIN · ESTIMATE"
+                        : gone != null
+                        ? "NEXT APPROACHING TRAIN · ESTIMATE"
+                        : "ESTIMATED BARRIER TIMING",
+                    style: railEyebrow(colors),
                   ),
-                  if (lead.bracket.isNotEmpty)
-                    ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      title: const Text("About this estimate"),
-                      children: [Text(lead.bracket)],
+                  const SizedBox(height: 10),
+                  Text(
+                    lead == null
+                        ? "No approaching train reported"
+                        : lead.status == "closed" &&
+                              lead.etaMin <= 0 &&
+                              !lead.positionOnSegment
+                        ? "Estimated passing window"
+                        : gateLabel(lead.etaMin, lead.closesInMin, lead.status),
+                    style: text.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w500,
                     ),
-                ] else
-                  Text(
-                    "The barrier’s position is unknown.",
-                    style: text.bodyMedium?.copyWith(color: colors.muted),
                   ),
-              ],
+                  const SizedBox(height: 10),
+                  if (lead != null) ...[
+                    Text("${lead.number} ${lead.name}", style: text.bodyMedium),
+                    if (lead.movement == "stopped")
+                      Text(
+                        "The train was reported stopped. Movement will appear when a moving report is available.",
+                        style: text.bodySmall?.copyWith(color: colors.muted),
+                      ),
+                    const SizedBox(height: 6),
+                    Text(
+                      "${lead.basis == 'timetable' ? 'Timetable estimate' : 'Train report'} ${lead.ageMin.round()} min old at check",
+                      style: text.bodySmall?.copyWith(color: colors.muted),
+                    ),
+                    if (lead.bracket.isNotEmpty)
+                      ExpansionTile(
+                        tilePadding: EdgeInsets.zero,
+                        title: const Text("About this estimate"),
+                        children: [Text(lead.bracket)],
+                      ),
+                  ] else
+                    Text(
+                      "The barrier’s position is unknown.",
+                      style: text.bodyMedium?.copyWith(color: colors.muted),
+                    ),
+                ],
+              ),
             ),
-          ),
           if (gone != null)
             Padding(
               padding: const EdgeInsets.only(top: 12),
@@ -586,9 +618,18 @@ class PredictBody extends StatelessWidget {
     if (grouped.isEmpty && sightings.isEmpty && passed.isEmpty) {
       return Padding(
         padding: const EdgeInsets.only(top: 16),
-        child: Text(
-          "No live trains reported on this stretch right now.",
-          style: text.bodyMedium?.copyWith(color: colors.muted),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (predict.coverage?.notice case final String notice)
+              _Notice(notice),
+            _AwaitingUpdates(predict.awaitingUpdate),
+            if (predict.awaitingUpdate.isEmpty)
+              Text(
+                "No live trains reported on this stretch right now.",
+                style: text.bodyMedium?.copyWith(color: colors.muted),
+              ),
+          ],
         ),
       );
     }
@@ -596,14 +637,20 @@ class PredictBody extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 16),
-        if (grouped.isEmpty)
+        if (predict.coverage?.notice case final String notice) _Notice(notice),
+        _AwaitingUpdates(predict.awaitingUpdate),
+        if (grouped.isEmpty && predict.awaitingUpdate.isEmpty)
           Text(
             "No approaching train was found in the available reports. Gate position is unknown.",
             style: text.bodyMedium?.copyWith(color: colors.muted),
           )
         else
           for (final entry in grouped.entries)
-            _TrainBlock(number: entry.key, rows: entry.value),
+            _TrainBlock(
+              number: entry.key,
+              rows: entry.value,
+              otherReported: predict.awaitingUpdate.isNotEmpty,
+            ),
         if (passed.isNotEmpty) ...[
           const SizedBox(height: 8),
           ExpansionTile(
@@ -632,9 +679,14 @@ class PredictBody extends StatelessWidget {
 }
 
 class _TrainBlock extends StatelessWidget {
-  const _TrainBlock({required this.number, required this.rows});
+  const _TrainBlock({
+    required this.number,
+    required this.rows,
+    this.otherReported = false,
+  });
   final String number;
   final List<Approach> rows;
+  final bool otherReported;
   @override
   Widget build(BuildContext context) {
     final colors = RailColors.of(context), text = Theme.of(context).textTheme;
@@ -653,7 +705,7 @@ class _TrainBlock extends StatelessWidget {
           const SizedBox(width: 12),
           Flexible(
             child: Text(
-              gateLabel(row.eta, row.closesIn),
+              gateLabel(row.eta, row.closesIn, row.status),
               textAlign: TextAlign.right,
               style: text.bodySmall?.copyWith(color: colors.muted),
             ),
@@ -671,6 +723,10 @@ class _TrainBlock extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (otherReported) ...[
+            Text("OTHER REPORTED TRAIN · ESTIMATE", style: railEyebrow(colors)),
+            const SizedBox(height: 8),
+          ],
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -906,7 +962,8 @@ class _GateRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = RailColors.of(context), text = Theme.of(context).textTheme;
-    final hot = gate.eta != null;
+    final uncertain = gate.status == "uncertain";
+    final hot = gate.eta != null || uncertain;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -945,7 +1002,11 @@ class _GateRow extends StatelessWidget {
                     ),
                     const SizedBox(height: 5),
                     Text(
-                      "${gate.km.toStringAsFixed(1)} km away${hot ? ' · Est. ${gateLabel(gate.eta!, gate.closesIn)}' : ''}",
+                      "${gate.km.toStringAsFixed(1)} km away${uncertain
+                          ? ' · Position update needed'
+                          : gate.eta != null
+                          ? ' · Est. ${gateLabel(gate.eta!, gate.closesIn, gate.status)}'
+                          : ''}",
                       style: text.bodySmall?.copyWith(color: colors.muted),
                     ),
                   ],
@@ -1023,6 +1084,8 @@ class CrossingTimeline extends StatelessWidget {
           Text(
             historical
                 ? "TRAINS AT THIS SAVED CHECK"
+                : scene.awaitingUpdate.isNotEmpty
+                ? "OTHER REPORTED TRAINS AT THIS CROSSING"
                 : "NEXT TRAINS AT THIS CROSSING",
             style: railEyebrow(colors),
           ),
@@ -1040,8 +1103,10 @@ class CrossingTimeline extends StatelessWidget {
                   ),
                   const SizedBox(height: 5),
                   Text(
-                    row.etaMin <= 1
+                    row.etaMin <= 0
                         ? "Estimated to be passing"
+                        : row.etaMin < 1
+                        ? "Estimated train arrival within 1 min"
                         : "Train arrival in about ${row.etaMin.round()} min",
                     style: text.bodySmall?.copyWith(color: colors.muted),
                   ),

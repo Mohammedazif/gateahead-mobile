@@ -66,7 +66,7 @@ void main() {
         isA<RailException>().having(
           (err) => err.message,
           "message",
-          "Too many checks. Wait a few minutes and try again.",
+          "Too many checks. Automatic checks are paused; try again in a few minutes.",
         ),
       ),
     );

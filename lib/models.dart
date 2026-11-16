@@ -247,8 +247,9 @@ class GatePrediction {
     required this.eta,
     required this.status,
     this.closesIn,
+    this.train = "",
   });
-  final String id, status;
+  final String id, status, train;
   final double eta;
   final double? closesIn;
   static GatePrediction? tryParse(Object? raw) {
@@ -260,12 +261,87 @@ class GatePrediction {
       eta: eta,
       status: _str(raw["status"]),
       closesIn: _maybeNum(raw["closes_in"]),
+      train: _str(raw["train"]),
+    );
+  }
+}
+
+class AwaitingTrain {
+  const AwaitingTrain({
+    required this.number,
+    required this.name,
+    required this.current,
+    required this.ageMin,
+    this.ids = const [],
+  });
+  final String number, name, current;
+  final double ageMin;
+  final List<String> ids;
+
+  static AwaitingTrain? tryParse(Object? raw) {
+    if (raw is! Map || raw["number"] is! String) return null;
+    return AwaitingTrain(
+      number: raw["number"],
+      name: _str(raw["name"]),
+      current: _str(raw["current"]),
+      ageMin: _maybeNum(raw["age_min"]) ?? 0,
+      ids: [for (final id in (raw["ids"] as List?) ?? const []) id.toString()],
+    );
+  }
+}
+
+class TrainCoverage {
+  const TrainCoverage({
+    this.liveChecked = 0,
+    this.liveCandidates = 0,
+    this.pendingLive = 0,
+    this.unavailableLive = 0,
+    this.unavailableDiscovery = 0,
+    this.missingOrStaleRoutes = 0,
+  });
+
+  final int liveChecked,
+      liveCandidates,
+      pendingLive,
+      unavailableLive,
+      unavailableDiscovery,
+      missingOrStaleRoutes;
+
+  String? get notice {
+    if (unavailableDiscovery > 0) {
+      return "Train discovery could not complete. Some services may be missing; refresh to try again.";
+    }
+    if (pendingLive > 0) {
+      return "$liveChecked of $liveCandidates train checks completed. $pendingLive still pending; refresh to continue.";
+    }
+    if (missingOrStaleRoutes > 0) {
+      return "Some train timetables are missing or need refreshing. Coverage is incomplete.";
+    }
+    if (unavailableLive > 0) {
+      return "Some services have no current running report. Coverage is incomplete.";
+    }
+    return null;
+  }
+
+  static TrainCoverage? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    return TrainCoverage(
+      liveChecked: _maybeNum(raw["live_checked"])?.round() ?? 0,
+      liveCandidates: _maybeNum(raw["live_candidates"])?.round() ?? 0,
+      pendingLive: _maybeNum(raw["pending_live"])?.round() ?? 0,
+      unavailableLive: _maybeNum(raw["unavailable_live"])?.round() ?? 0,
+      unavailableDiscovery:
+          _maybeNum(raw["unavailable_discovery"])?.round() ?? 0,
+      missingOrStaleRoutes:
+          _maybeNum(raw["missing_or_stale_routes"])?.round() ?? 0,
     );
   }
 }
 
 class Predict {
   const Predict({
+    this.awaitingUpdate = const [],
+    this.coverage,
     this.gatePredictions,
     this.error = "",
     this.crossings = 0,
@@ -277,11 +353,15 @@ class Predict {
     this.sightings = const [],
     this.offline = false,
     this.savedAt,
+    this.generatedAt,
   });
 
   final List<GatePrediction>? gatePredictions;
+  final List<AwaitingTrain> awaitingUpdate;
+  final TrainCoverage? coverage;
   final bool offline;
   final DateTime? savedAt;
+  final DateTime? generatedAt;
 
   final String error;
   final int crossings;
@@ -294,6 +374,11 @@ class Predict {
 
   static Predict parse(Map<String, dynamic> json) {
     return Predict(
+      awaitingUpdate: [
+        for (final row in (json["awaiting_update"] as List?) ?? const [])
+          ?AwaitingTrain.tryParse(row),
+      ],
+      coverage: TrainCoverage.tryParse(json["coverage"]),
       gatePredictions: json["gate_predictions"] is List
           ? [
               for (final row in json["gate_predictions"] as List)
@@ -304,6 +389,7 @@ class Predict {
       savedAt: json["_saved_at"] is int
           ? DateTime.fromMillisecondsSinceEpoch(json["_saved_at"])
           : null,
+      generatedAt: DateTime.tryParse(_str(json["generated_at"])),
       error: _str(json["error"]),
       crossings: _maybeNum(json["crossings"])?.round() ?? 0,
       stations: [
@@ -339,8 +425,14 @@ class SceneTrain {
     this.positionOnSegment = false,
     this.bracket = "",
     this.closesInMin,
+    this.movement = "",
+    this.current = "",
+    this.basis = "",
+    this.snapshotAt,
   });
 
+  final String movement, current, basis;
+  final DateTime? snapshotAt;
   final bool positionOnSegment;
   final String number;
   final String name;
@@ -366,6 +458,10 @@ class SceneTrain {
       ageMin: _maybeNum(json["age_min"]) ?? 0,
       bracket: _str(json["bracket"]),
       closesInMin: _maybeNum(json["closes_in_min"]),
+      movement: _str(json["movement"]),
+      current: _str(json["current"]),
+      basis: _str(json["basis"]),
+      snapshotAt: _timestamp(json["snapshot_at"]),
     );
   }
 }
@@ -400,6 +496,8 @@ class SceneCrossing {
 
 class Scene {
   const Scene({
+    this.awaitingUpdate = const [],
+    this.coverage,
     required this.available,
     this.error = "",
     this.crossing,
@@ -411,6 +509,8 @@ class Scene {
   });
 
   final bool offline;
+  final List<AwaitingTrain> awaitingUpdate;
+  final TrainCoverage? coverage;
   final DateTime? savedAt;
 
   final bool available;
@@ -432,6 +532,11 @@ class Scene {
       rail.add(Spot(lat, lon));
     }
     return Scene(
+      awaitingUpdate: [
+        for (final row in (json["awaiting_update"] as List?) ?? const [])
+          ?AwaitingTrain.tryParse(row),
+      ],
+      coverage: TrainCoverage.tryParse(json["coverage"]),
       offline: json["_offline"] == true,
       savedAt: json["_saved_at"] is int
           ? DateTime.fromMillisecondsSinceEpoch(json["_saved_at"])
@@ -512,7 +617,16 @@ Map<String, dynamic> _map(Map raw) {
 String _str(Object? value) => value == null ? "" : value.toString();
 
 double? _maybeNum(Object? value) {
-  if (value is num) return value.toDouble();
-  if (value is String) return double.tryParse(value);
-  return null;
+  final number = switch (value) {
+    num value => value.toDouble(),
+    String value => double.tryParse(value),
+    _ => null,
+  };
+  return number?.isFinite == true ? number : null;
+}
+
+DateTime? _timestamp(Object? value) {
+  final seconds = _maybeNum(value);
+  if (seconds == null || !seconds.isFinite) return null;
+  return DateTime.fromMillisecondsSinceEpoch((seconds * 1000).round());
 }

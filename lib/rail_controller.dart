@@ -6,6 +6,7 @@ import "api.dart";
 import "format.dart";
 import "models.dart";
 import "device_store.dart";
+import "timing.dart";
 
 class RailController extends ChangeNotifier {
   RailController(
@@ -15,10 +16,7 @@ class RailController extends ChangeNotifier {
   }) {
     favorites = storage?.favorites() ?? [];
     refresh = storage?.settings() ?? const RefreshSettings();
-    final paused = storage?.read("paused-until");
-    if (paused is int) {
-      pausedUntil = DateTime.fromMillisecondsSinceEpoch(paused);
-    }
+    pausedUntil = storedDateTime(storage?.read("paused-until"));
   }
 
   final DeviceStore? storage;
@@ -50,22 +48,49 @@ class RailController extends ChangeNotifier {
   List<Gate> gates = const [];
   bool loadingGates = false;
   String? gatesNote;
-  Predict? predict;
+  Predict? _predict;
+  final Map<String, Scene> _gateChecks = {};
+  List<Scene> get gateChecks {
+    final now = DateTime.now();
+    final predictionAt = _predict?.savedAt ?? _predict?.generatedAt;
+    return [
+      for (final check in _gateChecks.values)
+        if (!check.offline &&
+            check.savedAt != null &&
+            (predictionAt == null || !check.savedAt!.isBefore(predictionAt)) &&
+            now.difference(check.savedAt!).inMinutes < 5)
+          currentScene(check, now)!,
+    ];
+  }
+
+  Predict? get predict => withGateChecks(
+    currentPrediction(_predict, DateTime.now()),
+    gateChecks,
+    gates,
+  );
+  set predict(Predict? value) => _predict = value;
+  List<Gate> get markedGates =>
+      markGates(gates, historical ? null : predict, gateChecks);
   DateTime? checkedAt;
   bool checking = false;
   bool locating = false;
   String? error;
   Gate? selected;
-  Scene? scene;
+  Scene? _scene;
+  Scene? get scene => currentScene(_scene, DateTime.now());
+  set scene(Scene? value) => _scene = value;
   bool sceneLoading = false;
   String? sceneMessage;
 
   int _generation = 0;
   int _sceneTicket = 0;
+  int _locationTicket = 0;
   bool _confirming = false;
   Timer? _nameTimer;
 
   void askPlace(double lat, double lon) {
+    _locationTicket++;
+    locating = false;
     pending = Spot(lat, lon);
     spotName = null;
     naming = true;
@@ -75,14 +100,14 @@ class RailController extends ChangeNotifier {
     _nameTimer = Timer(nameDelay, () async {
       try {
         final name = await api.placeName(lat, lon);
-        if (pending != asked) return;
+        if (!identical(pending, asked)) return;
         spotName = name?.trim();
         if (spotName?.isEmpty ?? false) spotName = null;
       } catch (_) {
-        if (pending != asked) return;
+        if (!identical(pending, asked)) return;
         spotName = null;
       } finally {
-        if (pending == asked) {
+        if (identical(pending, asked)) {
           naming = false;
           notifyListeners();
         }
@@ -114,6 +139,7 @@ class RailController extends ChangeNotifier {
   Future<void> choosePlace(double lat, double lon, {String? label}) async {
     final ticket = ++_generation;
     _sceneTicket += 1;
+    _gateChecks.clear();
     _nameTimer?.cancel();
     final knownLabel = label?.trim();
     final hasLabel = knownLabel != null && knownLabel.isNotEmpty;
@@ -194,9 +220,22 @@ class RailController extends ChangeNotifier {
   }
 
   void beginLocate() {
+    _locationTicket++;
     locating = true;
     error = null;
     notifyListeners();
+  }
+
+  Future<void> locate(Future<Spot> Function() readPosition) async {
+    beginLocate();
+    final ticket = _locationTicket, generation = _generation;
+    bool current() => ticket == _locationTicket && generation == _generation;
+    try {
+      final position = await readPosition();
+      if (current()) await choosePlace(position.lat, position.lon);
+    } catch (_) {
+      if (current()) failLocation();
+    }
   }
 
   Future<void> check({bool automatic = false}) async {
@@ -267,6 +306,12 @@ class RailController extends ChangeNotifier {
       final body = await api.scene(here.lat, here.lon, gate.id);
       if (ticket != _sceneTicket) return;
       scene = body;
+      if (body.available &&
+          !body.offline &&
+          body.error.isEmpty &&
+          body.crossing?.id == gate.id) {
+        _gateChecks[gate.id] = body;
+      }
       if (!body.available || body.rail.length < 2) {
         sceneMessage = body.error.isNotEmpty ? friendlyError(body.error) : "This crossing has no rail line on the map, so the train stays off it.";
       }
@@ -295,11 +340,11 @@ class RailController extends ChangeNotifier {
 
   Future<void> restore() async {
     final row = storage?.read("last-place");
-    if (row is Map && row["lat"] is num && row["lon"] is num) {
+    if (row is Map && validCoordinates(row["lat"], row["lon"])) {
       await choosePlace(
         (row["lat"] as num).toDouble(),
         (row["lon"] as num).toDouble(),
-        label: row["label"] as String?,
+        label: row["label"] is String ? row["label"] : null,
       );
     }
   }
@@ -371,8 +416,10 @@ class RailController extends ChangeNotifier {
   }
 
   Future<void> openSaved(SavedGate saved) async {
+    final ticket = _generation + 1;
+    final sceneTicket = _sceneTicket + 1;
     await choosePlace(saved.place.lat, saved.place.lon, label: saved.label);
-    if (place != saved.place) return;
+    if (ticket != _generation || sceneTicket != _sceneTicket) return;
     final match = gates.where((gate) => gate.id == saved.gate.id).firstOrNull;
     await openGate(match ?? saved.gate);
   }
@@ -380,8 +427,10 @@ class RailController extends ChangeNotifier {
   Future<bool> openLink(String text) async {
     final link = parseCrossingLink(text);
     if (link == null) return false;
+    final ticket = _generation + 1;
+    final sceneTicket = _sceneTicket + 1;
     await choosePlace(link.place.lat, link.place.lon);
-    if (place != link.place) return true;
+    if (ticket != _generation || sceneTicket != _sceneTicket) return true;
     final gate = gates.where((gate) => gate.id == link.gateId).firstOrNull;
     if (gate != null) await openGate(gate);
     return true;

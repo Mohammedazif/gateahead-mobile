@@ -38,6 +38,73 @@ void main() {
     expect(restored.crossings, 1);
   });
 
+  test("a malformed successful reply preserves the saved prediction", () async {
+    final store = DeviceStore(await SharedPreferences.getInstance());
+    var reply = '{"crossings":1,"approaching":[]}';
+    final api = HttpRailApi(
+      base: "https://example.test",
+      storage: store,
+      client: MockClient((request) async => http.Response(reply, 200)),
+    );
+    final fresh = await api.predict(12, 75);
+    for (final malformed in [
+      "<html>temporary outage</html>",
+      "[]",
+      "null",
+      '{"approaching":{}}',
+      '{"awaiting_update":{}}',
+      '{"approaching":[{"train":"16650","eta":3,"ids":{}}]}',
+    ]) {
+      reply = malformed;
+      final restored = await api.predict(12, 75);
+      expect(restored.offline, isTrue);
+      expect(restored.savedAt, fresh.savedAt);
+      expect(restored.crossings, 1);
+    }
+  });
+
+  test(
+    "malformed crossing arrays preserve the saved scene and gates",
+    () async {
+      final store = DeviceStore(await SharedPreferences.getInstance());
+      var malformed = false;
+      final api = HttpRailApi(
+        base: "https://example.test",
+        storage: store,
+        client: MockClient((request) async {
+          final scene = request.url.path == "/scene";
+          return http.Response(
+            jsonEncode(
+              scene
+                  ? {"available": true, "trains": malformed ? {} : []}
+                  : {"gates": malformed ? {} : []},
+            ),
+            200,
+          );
+        }),
+      );
+      final scene = await api.scene(12, 75, "osm:1");
+      final gates = await api.gates(12, 75);
+      final raw = store.read("responses") as Map;
+      final old = DateTime.now()
+          .subtract(const Duration(minutes: 2))
+          .millisecondsSinceEpoch;
+      for (final row in raw.values) {
+        (row as Map)["at"] = old;
+      }
+      await store.write("responses", raw);
+      malformed = true;
+      final cachedScene = await api.scene(12, 75, "osm:1");
+      final cachedGates = await api.gates(12, 75);
+      expect(cachedScene.offline, isTrue);
+      expect(cachedScene.available, scene.available);
+      expect(cachedScene.savedAt!.millisecondsSinceEpoch, old);
+      expect(cachedGates.offline, isTrue);
+      expect(cachedGates.gates, gates.gates);
+      expect(cachedGates.savedAt!.millisecondsSinceEpoch, old);
+    },
+  );
+
   test(
     "saved gate names survive a new controller and can be removed",
     () async {

@@ -33,6 +33,7 @@ class _CitySearchState extends State<CitySearch> {
   void _changed(String value) {
     _timer?.cancel();
     final trimmed = value.trim();
+    final ticket = ++_ticket;
     if (trimmed.length < 2) {
       setState(() {
         _hits = const [];
@@ -41,7 +42,6 @@ class _CitySearchState extends State<CitySearch> {
       });
       return;
     }
-    final ticket = ++_ticket;
     _timer = Timer(const Duration(milliseconds: 160), () async {
       try {
         final hits = await widget.api.cities(trimmed);

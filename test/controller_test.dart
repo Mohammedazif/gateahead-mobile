@@ -5,6 +5,7 @@ import "package:gateahead/api.dart";
 import "package:gateahead/format.dart";
 import "package:gateahead/models.dart";
 import "package:gateahead/rail_controller.dart";
+import "package:gateahead/device_store.dart";
 
 void main() {
   test("a newer place wins when two lookups overlap", () async {
@@ -188,6 +189,123 @@ void main() {
     expect(rail.scene, isNull);
     rail.dispose();
   });
+
+  test("repeating the same map pick ignores the first name reply", () async {
+    final api = _ScriptedApi();
+    final rail = RailController(api, nameDelay: Duration.zero);
+    addTearDown(rail.dispose);
+    rail.askPlace(12, 75);
+    await Future<void>.delayed(Duration.zero);
+    rail.askPlace(12, 75);
+    api.placeCompleters.first.complete("Old name");
+    await Future<void>.delayed(Duration.zero);
+    expect(rail.spotName, isNull);
+    expect(rail.naming, isTrue);
+    api.placeCompleters.last.complete("New name");
+    await Future<void>.delayed(Duration.zero);
+    expect(rail.spotName, "New name");
+  });
+
+  test("a saved gate cannot reopen after disposal", () async {
+    final api = _ScriptedApi();
+    final rail = RailController(api);
+    const gate = Gate(
+      id: "saved",
+      name: "LC",
+      lat: 12,
+      lon: 75,
+      km: 0,
+      source: "osm",
+    );
+    final opening = rail.openSaved(const SavedGate(gate, "Home", Spot(12, 75)));
+    rail.dispose();
+    api.gatesCompleters.single.complete(const GatesBody(gates: []));
+    await opening;
+    expect(rail.selected, isNull);
+  });
+
+  test("a shared crossing cannot reopen after disposal", () async {
+    final api = _ScriptedApi();
+    final rail = RailController(api);
+    const gate = Gate(
+      id: "shared",
+      name: "LC",
+      lat: 12,
+      lon: 75,
+      km: 0,
+      source: "osm",
+    );
+    final opening = rail.openLink(
+      "https://example.test/?lat=12&lon=75&gate=shared",
+    );
+    rail.dispose();
+    api.gatesCompleters.single.complete(const GatesBody(gates: [gate]));
+    await opening;
+    expect(rail.selected, isNull);
+  });
+
+  test(
+    "a saved gate ignores a newer selection at the same coordinates",
+    () async {
+      final api = _ScriptedApi();
+      final rail = RailController(api);
+      addTearDown(rail.dispose);
+      const gate = Gate(
+        id: "saved",
+        name: "LC",
+        lat: 12,
+        lon: 75,
+        km: 0,
+        source: "osm",
+      );
+      final opening = rail.openSaved(
+        const SavedGate(gate, "Home", Spot(12, 75)),
+      );
+      final newer = rail.choosePlace(12, 75, label: "New selection");
+      api.gatesCompleters.first.complete(const GatesBody(gates: [gate]));
+      api.gatesCompleters.last.complete(const GatesBody(gates: []));
+      await Future.wait([opening, newer]);
+      expect(rail.placeLabel, "New selection");
+      expect(rail.selected, isNull);
+    },
+  );
+
+  for (final shared in [false, true]) {
+    test(
+      "a pending ${shared ? 'shared' : 'saved'} gate respects a newer gate selection",
+      () async {
+        final api = _ScriptedApi();
+        final rail = RailController(api);
+        addTearDown(rail.dispose);
+        const old = Gate(
+          id: "old",
+          name: "Old gate",
+          lat: 12,
+          lon: 75,
+          km: 0,
+          source: "osm",
+        );
+        const newer = Gate(
+          id: "new",
+          name: "New gate",
+          lat: 12,
+          lon: 75,
+          km: 0,
+          source: "osm",
+        );
+        final pending = shared
+            ? rail.openLink("https://example.test/?lat=12&lon=75&gate=old")
+            : rail.openSaved(const SavedGate(old, "Home", Spot(12, 75)));
+        api.sceneCompleter.complete(const Scene(available: false));
+        await rail.openGate(newer);
+        api.gatesCompleters.single.complete(
+          const GatesBody(gates: [old, newer]),
+        );
+        await pending;
+        expect(rail.selected!.id, "new");
+      },
+    );
+  }
 }
 
 class _ScriptedApi implements RailApi {

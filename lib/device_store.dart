@@ -126,10 +126,19 @@ class DeviceStore {
       if (row is! Map) continue;
       final gate = Gate.tryParse(row["gate"]);
       final lat = row["lat"], lon = row["lon"], label = row["label"];
-      if (gate == null || lat is! num || lon is! num || label is! String) {
+      if (gate == null ||
+          !validCoordinates(gate.lat, gate.lon) ||
+          !validCoordinates(lat, lon) ||
+          label is! String) {
         continue;
       }
-      result.add(SavedGate(gate, label, Spot(lat.toDouble(), lon.toDouble())));
+      result.add(
+        SavedGate(
+          gate,
+          label,
+          Spot((lat as num).toDouble(), (lon as num).toDouble()),
+        ),
+      );
     }
     return result;
   }
@@ -140,36 +149,46 @@ class DeviceStore {
     return RefreshSettings(
       enabled: row["enabled"] == true,
       commute: row["commute"] == true,
-      start: row["start"] is String ? row["start"] : "08:00",
-      end: row["end"] is String ? row["end"] : "10:00",
+      start: _validClock(row["start"]) ? row["start"] : "08:00",
+      end: _validClock(row["end"]) ? row["end"] : "10:00",
       weekdays: row["weekdays"] != false,
     );
   }
 
   CachedJson? response(String key) {
-    final all = read("responses");
-    final row = all is Map ? all[key] : null;
-    if (row is! Map || row["at"] is! int || row["data"] is! Map) return null;
-    return CachedJson(
-      DateTime.fromMillisecondsSinceEpoch(row["at"]),
-      Map<String, dynamic>.from(row["data"]),
-    );
+    return _responses()[key];
+  }
+
+  Map<String, CachedJson> _responses() {
+    final raw = read("responses");
+    if (raw is! Map) return {};
+    final result = <String, CachedJson>{};
+    for (final entry in raw.entries) {
+      final row = entry.value;
+      if (entry.key is! String || row is! Map || row["data"] is! Map) continue;
+      final at = storedDateTime(row["at"]);
+      if (at == null) continue;
+      final data = Map<String, dynamic>.from(row["data"]);
+      final path = Uri.tryParse(entry.key)?.path ?? "";
+      if (!validResponseBody(path, data) ||
+          (data["error"] != null && data["error"] != "")) {
+        continue;
+      }
+      result[entry.key] = CachedJson(at, data);
+    }
+    return result;
   }
 
   Future<DateTime> saveResponse(String key, Map<String, dynamic> data) async {
     final at = DateTime.now();
-    final raw = read("responses");
-    final all = raw is Map
-        ? Map<String, dynamic>.from(raw)
-        : <String, dynamic>{};
-    all[key] = {"at": at.millisecondsSinceEpoch, "data": data};
+    final all = _responses();
+    all[key] = CachedJson(at, data);
     final keys = all.keys.toList()
-      ..sort(
-        (a, b) => ((all[b] as Map)["at"] as int).compareTo(
-          (all[a] as Map)["at"] as int,
-        ),
-      );
-    await write("responses", {for (final k in keys.take(24)) k: all[k]});
+      ..sort((a, b) => all[b]!.at.compareTo(all[a]!.at));
+    await write("responses", {
+      for (final k in keys.take(24))
+        k: {"at": all[k]!.at.millisecondsSinceEpoch, "data": all[k]!.data},
+    });
     return at;
   }
 
@@ -184,6 +203,61 @@ class DeviceStore {
     await write("installation", id);
     return id;
   }
+}
+
+bool validCoordinates(Object? lat, Object? lon) =>
+    lat is num &&
+    lon is num &&
+    lat.isFinite &&
+    lon.isFinite &&
+    lat.abs() <= 90 &&
+    lon.abs() <= 180;
+
+DateTime? storedDateTime(Object? value) {
+  if (value is! int) return null;
+  try {
+    return DateTime.fromMillisecondsSinceEpoch(value);
+  } on RangeError {
+    return null;
+  }
+}
+
+bool _validClock(Object? value) =>
+    value is String && RegExp(r"^([01]\d|2[0-3]):[0-5]\d$").hasMatch(value);
+
+/// Reject unusable cached containers before parsers or UI consumers see them.
+bool validResponseBody(String path, Map<String, dynamic> data) {
+  if (data["error"] is String && (data["error"] as String).isNotEmpty) {
+    return true;
+  }
+  if (path == "/gates" && data["gates"] is! List) return false;
+  if (path == "/predict" && data["approaching"] is! List) return false;
+  if (path == "/scene" &&
+      (data["available"] is! bool || data["trains"] is! List)) {
+    return false;
+  }
+  final fields = switch (path) {
+    "/predict" => [
+      "stations",
+      "approaching",
+      "passed",
+      "sightings",
+      "gate_predictions",
+      "awaiting_update",
+    ],
+    "/scene" => ["rail", "trains", "passed", "awaiting_update"],
+    "/gates" => ["gates"],
+    _ => <String>[],
+  };
+  for (final field in fields) {
+    final rows = data[field];
+    if (rows == null) continue;
+    if (rows is! List) return false;
+    for (final row in rows) {
+      if (row is Map && row["ids"] != null && row["ids"] is! List) return false;
+    }
+  }
+  return true;
 }
 
 String responseKey(String path, double lat, double lon) =>

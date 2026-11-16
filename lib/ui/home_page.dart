@@ -10,6 +10,7 @@ import "../geo.dart";
 import "../models.dart";
 import "../rail_controller.dart";
 import "../theme.dart";
+import "../timing.dart";
 import "train_sheet.dart";
 import "location_control.dart";
 
@@ -326,12 +327,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _locate() async {
-    rail.beginLocate();
-    try {
+    await rail.locate(() async {
       final enabled = await Geolocator.isLocationServiceEnabled();
       if (!enabled) {
-        rail.failLocation();
-        return;
+        throw StateError("Location service unavailable");
       }
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
@@ -339,8 +338,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
-        rail.failLocation();
-        return;
+        throw StateError("Location permission unavailable");
       }
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -348,16 +346,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           timeLimit: Duration(seconds: 8),
         ),
       );
-      await rail.choosePlace(position.latitude, position.longitude);
-    } catch (_) {
-      rail.failLocation();
-    }
+      return Spot(position.latitude, position.longitude);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final colors = RailColors.of(context);
-    final gates = markGates(rail.gates, rail.historical ? null : rail.predict);
+    final gates = rail.markedGates;
     final scene = rail.scene;
     final lead =
         !rail.sceneHistorical && scene != null && scene.trains.isNotEmpty
@@ -367,7 +363,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final trainSpot =
         lead != null &&
             lead.positionOnSegment &&
-            lead.ageMin < 8 &&
+            sceneReportAge(lead, scene!, DateTime.now()) < 8 &&
             railLine.length >= 2
         ? pointAlongKm(railLine, lead.alongKm)
         : null;
