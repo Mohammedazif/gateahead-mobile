@@ -2,6 +2,12 @@ import "package:flutter/material.dart";
 import "package:flutter/services.dart";
 
 import "api.dart";
+import "device_store.dart";
+
+import "package:shared_preferences/shared_preferences.dart";
+
+import "dart:async";
+
 import "rail_controller.dart";
 import "theme.dart";
 import "ui/home_page.dart";
@@ -10,7 +16,16 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final mode = await RailThemeStore.read();
   _overlay(RailColors.forMode(mode));
-  runApp(GateAheadApp(rail: RailController(HttpRailApi(base: defaultApiBase)), initialMode: mode));
+  final storage = DeviceStore(
+    await SharedPreferences.getInstance(),
+    namespace: defaultApiBase,
+  );
+  final rail = RailController(
+    HttpRailApi(base: defaultApiBase, storage: storage),
+    storage: storage,
+  );
+  runApp(GateAheadApp(rail: rail, initialMode: mode));
+  unawaited(rail.restore());
 }
 
 void _overlay(RailColors colors) {
@@ -21,13 +36,19 @@ void _overlay(RailColors colors) {
       statusBarIconBrightness: lightMode ? Brightness.dark : Brightness.light,
       statusBarBrightness: lightMode ? Brightness.light : Brightness.dark,
       systemNavigationBarColor: colors.bg,
-      systemNavigationBarIconBrightness: lightMode ? Brightness.dark : Brightness.light,
+      systemNavigationBarIconBrightness: lightMode
+          ? Brightness.dark
+          : Brightness.light,
     ),
   );
 }
 
 class GateAheadApp extends StatefulWidget {
-  const GateAheadApp({super.key, required this.rail, this.initialMode = RailThemeMode.dark});
+  const GateAheadApp({
+    super.key,
+    required this.rail,
+    this.initialMode = RailThemeMode.dark,
+  });
 
   final RailController rail;
   final RailThemeMode initialMode;
@@ -46,7 +67,9 @@ class _GateAheadAppState extends State<GateAheadApp> {
   }
 
   Future<void> _toggleTheme() async {
-    final next = _mode == RailThemeMode.light ? RailThemeMode.dark : RailThemeMode.light;
+    final next = _mode == RailThemeMode.light
+        ? RailThemeMode.dark
+        : RailThemeMode.light;
     setState(() => _mode = next);
     _overlay(RailColors.forMode(next));
     await RailThemeStore.write(next);

@@ -5,12 +5,38 @@ import "package:flutter/foundation.dart";
 import "api.dart";
 import "format.dart";
 import "models.dart";
+import "device_store.dart";
 
 class RailController extends ChangeNotifier {
   RailController(
     this.api, {
     this.nameDelay = const Duration(milliseconds: 280),
-  });
+    this.storage,
+  }) {
+    favorites = storage?.favorites() ?? [];
+    refresh = storage?.settings() ?? const RefreshSettings();
+    final paused = storage?.read("paused-until");
+    if (paused is int) {
+      pausedUntil = DateTime.fromMillisecondsSinceEpoch(paused);
+    }
+  }
+
+  final DeviceStore? storage;
+  late List<SavedGate> favorites;
+  late RefreshSettings refresh;
+  DateTime? lastAttempt;
+  DateTime? pausedUntil;
+  bool gatesCached = false;
+  bool get historical =>
+      predict?.offline == true ||
+      (checkedAt != null &&
+          DateTime.now().difference(checkedAt!).inMinutes >= 5);
+  bool get paused =>
+      pausedUntil != null && DateTime.now().isBefore(pausedUntil!);
+  bool get sceneHistorical =>
+      scene?.offline == true ||
+      (scene?.savedAt != null &&
+          DateTime.now().difference(scene!.savedAt!).inMinutes >= 5);
 
   final Duration nameDelay;
 
@@ -96,8 +122,23 @@ class RailController extends ChangeNotifier {
     pending = null;
     spotName = null;
     naming = false;
-    predict = null;
-    checkedAt = null;
+    final oldPredict = storage?.response(responseKey("/predict", lat, lon));
+    predict = oldPredict == null ? null : Predict.parse(oldPredict.restored());
+    checkedAt = oldPredict?.at;
+    final oldGates = storage?.response(responseKey("/gates", lat, lon));
+    gates = oldGates == null ? const [] : GatesBody.parse(oldGates.data).gates;
+    gatesCached = oldGates != null;
+    lastAttempt = null;
+    unawaited(
+      storage
+              ?.write("last-place", {
+                "lat": lat,
+                "lon": lon,
+                "label": placeLabel,
+              })
+              .then<void>((_) {}) ??
+          Future<void>.value(),
+    );
     error = null;
     selected = null;
     scene = null;
@@ -112,15 +153,16 @@ class RailController extends ChangeNotifier {
     try {
       final body = await api.gates(lat, lon);
       if (ticket != _generation) return;
-      gates = body.gates;
+      if (body.error.isEmpty) gates = body.gates;
+      gatesCached = body.offline;
       gatesNote = body.error.isEmpty ? null : friendlyError(body.error);
     } on RailException catch (err) {
       if (ticket != _generation) return;
-      gates = const [];
+      if (oldGates == null) gates = const [];
       gatesNote = err.message;
     } catch (_) {
       if (ticket != _generation) return;
-      gates = const [];
+      if (oldGates == null) gates = const [];
       gatesNote = "Could not load crossings.";
     } finally {
       if (ticket == _generation) {
@@ -157,9 +199,25 @@ class RailController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> check() async {
+  Future<void> check({bool automatic = false}) async {
     final here = place;
     if (here == null || checking) return;
+    if (paused) {
+      if (!automatic) {
+        error = "Checks are paused until ${pausedUntil!.toLocal()}.";
+        notifyListeners();
+      }
+      return;
+    }
+    if (lastAttempt != null &&
+        DateTime.now().difference(lastAttempt!).inSeconds < 90) {
+      if (!automatic) {
+        error = "Checked recently. Wait 90 seconds between train checks.";
+        notifyListeners();
+      }
+      return;
+    }
+    lastAttempt = DateTime.now();
     final ticket = _generation;
     checking = true;
     error = null;
@@ -167,11 +225,24 @@ class RailController extends ChangeNotifier {
     try {
       final body = await api.predict(here.lat, here.lon);
       if (ticket != _generation) return;
+      if (body.error.isNotEmpty) throw RailException(friendlyError(body.error));
       predict = body;
-      checkedAt = DateTime.now();
+      checkedAt = body.savedAt ?? DateTime.now();
+      if (selected != null && !body.offline) {
+        unawaited(openGate(selected!, refreshing: true));
+      }
     } on RailException catch (err) {
       if (ticket != _generation) return;
       error = err.message;
+      if (err.retryAt != null) {
+        pausedUntil = err.retryAt;
+        unawaited(
+          storage
+                  ?.write("paused-until", pausedUntil!.millisecondsSinceEpoch)
+                  .then<void>((_) {}) ??
+              Future<void>.value(),
+        );
+      }
     } catch (_) {
       if (ticket != _generation) return;
       error = "Could not check trains.";
@@ -183,13 +254,13 @@ class RailController extends ChangeNotifier {
     }
   }
 
-  Future<void> openGate(Gate gate) async {
+  Future<void> openGate(Gate gate, {bool refreshing = false}) async {
     final here = place;
     if (here == null) return;
     final ticket = ++_sceneTicket;
     selected = gate;
-    sceneLoading = true;
-    scene = null;
+    sceneLoading = !refreshing;
+    if (!refreshing) scene = null;
     sceneMessage = null;
     notifyListeners();
     try {
@@ -202,6 +273,15 @@ class RailController extends ChangeNotifier {
     } on RailException catch (err) {
       if (ticket != _sceneTicket) return;
       sceneMessage = err.message;
+      if (err.retryAt != null) {
+        pausedUntil = err.retryAt;
+        unawaited(
+          storage
+                  ?.write("paused-until", pausedUntil!.millisecondsSinceEpoch)
+                  .then<void>((_) {}) ??
+              Future<void>.value(),
+        );
+      }
     } catch (_) {
       if (ticket != _sceneTicket) return;
       sceneMessage = "Could not open this crossing.";
@@ -211,6 +291,100 @@ class RailController extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  Future<void> restore() async {
+    final row = storage?.read("last-place");
+    if (row is Map && row["lat"] is num && row["lon"] is num) {
+      await choosePlace(
+        (row["lat"] as num).toDouble(),
+        (row["lon"] as num).toDouble(),
+        label: row["label"] as String?,
+      );
+    }
+  }
+
+  void setRefresh(RefreshSettings value) {
+    refresh = value;
+    unawaited(
+      storage?.write("refresh", value.toJson()).then<void>((_) {}) ??
+          Future<void>.value(),
+    );
+    notifyListeners();
+  }
+
+  Future<void> autoCheck({required bool visible}) async {
+    notifyListeners();
+    if (!visible ||
+        !refresh.enabled ||
+        !refresh.allows(DateTime.now()) ||
+        paused) {
+      return;
+    }
+    if (lastAttempt != null &&
+        DateTime.now().difference(lastAttempt!).inSeconds < 120) {
+      return;
+    }
+    await check(automatic: true);
+  }
+
+  bool isSaved(Gate gate) => favorites.any((item) => item.gate.id == gate.id);
+
+  void saveGate(Gate gate, String label) {
+    if (place == null || label.trim().isEmpty) return;
+    favorites = [
+      ...favorites.where((item) => item.gate.id != gate.id),
+      SavedGate(gate, label.trim(), place!),
+    ];
+    if (favorites.length > 50) favorites.removeAt(0);
+    _saveFavorites();
+  }
+
+  void removeSaved(String id) {
+    favorites = favorites.where((item) => item.gate.id != id).toList();
+    _saveFavorites();
+  }
+
+  void renameSaved(SavedGate item, String label) {
+    if (label.trim().isEmpty) return;
+    favorites = favorites
+        .map(
+          (row) => row.gate.id == item.gate.id
+              ? SavedGate(row.gate, label.trim(), row.place)
+              : row,
+        )
+        .toList();
+    _saveFavorites();
+  }
+
+  void _saveFavorites() {
+    unawaited(
+      storage
+              ?.write(
+                "favorites",
+                favorites.map((item) => item.toJson()).toList(),
+              )
+              .then<void>((_) {}) ??
+          Future<void>.value(),
+    );
+    notifyListeners();
+  }
+
+  Future<void> openSaved(SavedGate saved) async {
+    await choosePlace(saved.place.lat, saved.place.lon, label: saved.label);
+    if (place != saved.place) return;
+    final match = gates.where((gate) => gate.id == saved.gate.id).firstOrNull;
+    await openGate(match ?? saved.gate);
+  }
+
+  Future<bool> openLink(String text) async {
+    final link = parseCrossingLink(text);
+    if (link == null) return false;
+    await choosePlace(link.place.lat, link.place.lon);
+    if (place != link.place) return true;
+    final gate = gates.where((gate) => gate.id == link.gateId).firstOrNull;
+    if (gate != null) await openGate(gate);
+    return true;
   }
 
   void closeScene() {

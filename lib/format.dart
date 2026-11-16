@@ -14,13 +14,21 @@ String friendlyError(String? message) {
   if (message == null || message.isEmpty) {
     return "Something went wrong. Try again in a moment.";
   }
-  if (RegExp(r"429|502|504|timeout|timed out|busy|map_busy", caseSensitive: false).hasMatch(message)) {
+  if (RegExp(
+    r"429|502|504|timeout|timed out|busy|map_busy",
+    caseSensitive: false,
+  ).hasMatch(message)) {
     return "The crossing list is busy. Wait a minute and try again.";
   }
-  if (RegExp(r"406|overpass|map_unavailable|could not reach|invalid data", caseSensitive: false).hasMatch(message)) {
+  if (RegExp(
+    r"406|overpass|map_unavailable|could not reach|invalid data",
+    caseSensitive: false,
+  ).hasMatch(message)) {
     return "The crossing list did not load. Try again in a minute.";
   }
-  if (message == "crossing_not_found") return "That crossing is no longer on the map.";
+  if (message == "crossing_not_found") {
+    return "That crossing is no longer on the map.";
+  }
   return message;
 }
 
@@ -61,15 +69,38 @@ String delayClass(int minutes) {
   return "ontime";
 }
 
-String etaLabel(double minutes) {
-  if (minutes <= 1) return "closing now";
-  if (minutes >= 60) {
-    final hours = minutes ~/ 60;
-    final mins = (minutes % 60).round();
-    if (mins == 0) return "closes in $hours hr";
-    return "closes in $hours hr $mins min";
+/// When the barrier comes down, or that it is down. Same wording as the website and the bot.
+///
+/// [eta] is minutes until the train reaches the crossing; [closesIn] is minutes until the barrier
+/// comes down (zero or less: down now). An older API without [closesIn] counts down to the train.
+String gateLabel(double eta, [double? closesIn]) {
+  final downIn = closesIn ?? eta;
+  if (downIn <= 0) {
+    return eta <= 1
+        ? "closed · train passing"
+        : "closed · train in ${eta.round()} min";
   }
-  return "closes in ${minutes.round()} min";
+  if (downIn < 1) return "closing now";
+  return "closes in ${_span(downIn)}";
+}
+
+String passedLabel(double ago) {
+  if (ago < 1) return "passed just now";
+  return "passed ${ago.round()} min ago";
+}
+
+String _span(double minutes) {
+  if (minutes >= 60) {
+    var hours = minutes ~/ 60;
+    var mins = (minutes - hours * 60).round();
+    if (mins == 60) {
+      hours += 1;
+      mins = 0;
+    }
+    if (mins == 0) return "$hours hr";
+    return "$hours hr $mins min";
+  }
+  return "${minutes.round()} min";
 }
 
 String labelStatus(String status) {
@@ -82,13 +113,21 @@ String labelStatus(String status) {
       return "Approaching";
     case "later":
       return "Later";
+    case "passed":
+      return "Passed";
     default:
       return status;
   }
 }
 
 class RunCopy {
-  const RunCopy({this.route, this.place, this.scheduled, this.delay, this.next});
+  const RunCopy({
+    this.route,
+    this.place,
+    this.scheduled,
+    this.delay,
+    this.next,
+  });
 
   final String? route;
   final String? place;
@@ -127,36 +166,49 @@ RunCopy runCopy(RunInfo row, {bool showDelay = false}) {
 }
 
 List<Gate> markGates(List<Gate> gates, Predict? predict) {
-  final marks = <String, ({String status, double eta, String label})>{};
-  for (final row in predict?.approaching ?? const <Approach>[]) {
-    for (final id in row.ids) {
-      final prev = marks[id];
-      if (prev == null || row.eta < prev.eta) {
-        marks[id] = (status: row.status, eta: row.eta, label: row.cluster);
-      }
-    }
+  final marks = <String, GatePrediction>{};
+  final rows =
+      predict?.gatePredictions ??
+      [
+        for (final row in predict?.approaching ?? const <Approach>[])
+          if (row.ids.length == 1)
+            GatePrediction(
+              id: row.ids.single,
+              eta: row.eta,
+              status: row.status,
+              closesIn: row.closesIn,
+            ),
+      ];
+  for (final row in rows) {
+    final previous = marks[row.id];
+    if (previous == null || row.eta < previous.eta) marks[row.id] = row;
   }
-  if (marks.isEmpty) return gates;
   return [
     for (final gate in gates)
-      if (marks[gate.id] case final mark?)
-        gate.copyWith(
-          name: mark.label.isEmpty ? gate.name : mark.label,
-          status: mark.status,
-          eta: mark.eta,
-        )
-      else
-        gate,
+      Gate(
+        id: gate.id,
+        name: gate.name,
+        lat: gate.lat,
+        lon: gate.lon,
+        km: gate.km,
+        source: gate.source,
+        status: marks[gate.id]?.status,
+        eta: marks[gate.id]?.eta,
+        closesIn: marks[gate.id]?.closesIn,
+      ),
   ];
 }
 
 List<Gate> shownGates(List<Gate> gates) {
-  final ranked = [...gates]..sort((a, b) {
-    final hot = (a.eta == null ? 1 : 0).compareTo(b.eta == null ? 1 : 0);
-    if (hot != 0) return hot;
-    if (a.eta != null && b.eta != null && a.eta != b.eta) return a.eta!.compareTo(b.eta!);
-    return a.km.compareTo(b.km);
-  });
+  final ranked = [...gates]
+    ..sort((a, b) {
+      final hot = (a.eta == null ? 1 : 0).compareTo(b.eta == null ? 1 : 0);
+      if (hot != 0) return hot;
+      if (a.eta != null && b.eta != null && a.eta != b.eta) {
+        return a.eta!.compareTo(b.eta!);
+      }
+      return a.km.compareTo(b.km);
+    });
   final hot = ranked.where((gate) => gate.eta != null);
   final rest = ranked.where((gate) => gate.eta == null).take(12);
   return [...hot, ...rest];
@@ -174,9 +226,15 @@ Map<String, List<Approach>> groupApproaches(List<Approach> rows) {
 }
 
 List<Sighting> lineSightings(Predict predict) {
-  final shown = predict.approaching.map((row) => row.train).toSet();
+  final shown = {
+    ...predict.approaching.map((row) => row.train),
+    ...predict.passed.map((row) => row.train),
+  };
   return predict.sightings
-      .where((row) => row.age < 45 && !row.passedLocal && !shown.contains(row.number))
+      .where(
+        (row) =>
+            row.age < 45 && !row.passedLocal && !shown.contains(row.number),
+      )
       .take(6)
       .toList();
 }

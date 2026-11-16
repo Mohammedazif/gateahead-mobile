@@ -57,6 +57,22 @@ The desktop build needs `clang`, `ninja-build`, `pkg-config`, and `libgtk-3-dev`
 
 `API_BASE` defaults to `http://127.0.0.1:8000`.
 
+## Navigation
+
+Search for a place above the map. The panel has separate **Nearby**, **Trains**, and **Saved** views; selecting a crossing opens its details. Settings holds the theme, automatic checks, and commute hours. Reporting opens its own sheet. Drag or tap the panel handle to make more room for the map or the list.
+
+Nearby markers use each gate's individual prediction, keep its own name, and do not copy a cluster ETA to every gate. Scene caches are refreshed when a newer nearby check exists. The crossing timing and next-train list use the same scene check. Train markers are hidden for reports at least eight minutes old and for positions outside the displayed track segment. The backend must provide `position_on_segment` before a train marker can appear.
+
+## Saved gates, sharing, and offline results
+
+Select a gate to save or rename it, copy its crossing link, and submit an unverified community report. Saved gates and successful API results stay on the device. Use **Open shared crossing link** to paste a GateAhead or OpenStreetMap link.
+
+Copied links use `https://gateahead.vercel.app/` by default. Override this with `--dart-define=WEB_BASE=https://your-site.example/` when building against another website.
+
+Optional automatic checks run every two minutes while the app is visible, with weekday and commute-hour controls in local device time. Manual train checks have a 90-second cooldown. Server rate limits pause further checks, and repeated scene opens reuse a result for 90 seconds.
+
+Cached predictions retain their original check time and are labeled as saved results. Stale train markers are suppressed; map tiles still need a connection. Community reports expire after ten minutes and remain separate from train predictions. Deploy a backend with `GET /reports` and `POST /reports` before using reports. Background push notifications require a separate messaging setup.
+
 The Crossing Pin logo masters and header images are in `assets/branding/`. Android uses the matching launcher PNGs and adaptive icon resources in `android/app/src/main/res/`; iOS uses the opaque PNGs in `ios/Runner/Assets.xcassets/AppIcon.appiconset/`. Rebuild the app to update its launcher icon.
 
 The complete reusable logo kit is maintained in the frontend repository at `branding/gateahead-logo-kit/`, with an accompanying `branding/gateahead-logo-kit-v1.zip` backup. In a combined workspace it is available at `../frontend/branding/`. It includes Android/iOS icon sets, six vector variants, print formats, and raster exports from 16 to 4096px, plus scripts for other sizes. The kit's `README.md` explains each format.

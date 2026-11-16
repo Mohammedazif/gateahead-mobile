@@ -27,7 +27,9 @@ void main() {
     expect(RailColors.dark.toggleLabel, "Light");
   });
 
-  testWidgets("the sheet toggle switches to the light theme", (tester) async {
+  testWidgets("appearance in settings switches to the light theme", (
+    tester,
+  ) async {
     GoogleFonts.config.allowRuntimeFetching = false;
     final rail = RailController(_IdleApi());
     final scroll = ScrollController();
@@ -57,12 +59,19 @@ void main() {
       ),
     );
 
+    expect(find.text("Light"), findsNothing);
+    await tester.tap(find.byTooltip("Open settings"));
+    await tester.pumpAndSettle();
     expect(find.text("Light"), findsOneWidget);
     await tester.tap(find.text("Light"));
-    await tester.pump();
-    expect(find.text("Dark"), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(mode, RailThemeMode.light);
     final decoration =
-        tester.widget<DecoratedBox>(find.byType(DecoratedBox).first).decoration
+        tester
+                .widget<DecoratedBox>(
+                  find.byKey(const ValueKey("train-sheet-surface")),
+                )
+                .decoration
             as BoxDecoration;
     expect(decoration.color, RailColors.light.sheet);
   });

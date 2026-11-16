@@ -11,6 +11,7 @@ import "../models.dart";
 import "../rail_controller.dart";
 import "../theme.dart";
 import "train_sheet.dart";
+import "location_control.dart";
 
 const _indiaBounds = GeoBox(west: 68.17, south: 6.75, east: 97.34, north: 35.5);
 const _wideLayout = 900.0;
@@ -61,9 +62,18 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  Timer? _refreshTimer;
+  bool _visible = true;
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _visible = state == AppLifecycleState.resumed;
+  }
+
   final GlobalKey _mapKey = GlobalKey();
   final ScrollController _dockScroll = ScrollController();
+  final DraggableScrollableController _sheetController =
+      DraggableScrollableController();
   MapController? _map;
   Spot? _framedPlace;
   String? _framedRail;
@@ -79,16 +89,25 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     rail.addListener(_onRail);
+    WidgetsBinding.instance.addObserver(this);
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => rail.autoCheck(visible: _visible),
+    );
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     rail.removeListener(_onRail);
     _dockScroll.dispose();
+    _sheetController.dispose();
     super.dispose();
   }
 
-  bool _isWide(Size size) => size.width >= _wideLayout;
+  bool _isWide(Size size) =>
+      size.width >= _wideLayout || (size.width >= 700 && size.height < 500);
 
   EdgeInsets _indiaPadding(bool wide, Size size) {
     if (wide) return const EdgeInsets.fromLTRB(56, 72, 40, 40);
@@ -338,13 +357,18 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final colors = RailColors.of(context);
-    final gates = markGates(rail.gates, rail.predict);
+    final gates = markGates(rail.gates, rail.historical ? null : rail.predict);
     final scene = rail.scene;
-    final lead = scene != null && scene.trains.isNotEmpty
+    final lead =
+        !rail.sceneHistorical && scene != null && scene.trains.isNotEmpty
         ? scene.trains.first
         : null;
     final railLine = scene?.rail ?? const <Spot>[];
-    final trainSpot = lead != null && railLine.length >= 2
+    final trainSpot =
+        lead != null &&
+            lead.positionOnSegment &&
+            lead.ageMin < 8 &&
+            railLine.length >= 2
         ? pointAlongKm(railLine, lead.alongKm)
         : null;
     final size = MediaQuery.sizeOf(context);
@@ -459,13 +483,18 @@ class _HomePageState extends State<HomePage> {
             ),
           ],
         ),
-        if (rail.selected != null)
-          Positioned(
-            top: MediaQuery.paddingOf(context).top + 8,
-            left: 12,
-            right: 88,
-            child: _RunCard(rail: rail),
+        Positioned(
+          top: MediaQuery.paddingOf(context).top + 14,
+          left: 14,
+          right: 76,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 390),
+              child: LocationControl(rail: rail, onLocate: _locate),
+            ),
           ),
+        ),
       ],
     );
     return Scaffold(
@@ -478,7 +507,7 @@ class _HomePageState extends State<HomePage> {
               children: [
                 Expanded(child: map),
                 SizedBox(
-                  width: 380,
+                  width: 400,
                   child: TrainSheet(
                     rail: rail,
                     onLocate: _locate,
@@ -491,93 +520,41 @@ class _HomePageState extends State<HomePage> {
           else ...[
             map,
             DraggableScrollableSheet(
-              initialChildSize: 0.38,
-              minChildSize: 0.22,
+              controller: _sheetController,
+              initialChildSize: (150 / size.height).clamp(.42, .5).toDouble(),
+              minChildSize: (150 / size.height).clamp(.28, .5).toDouble(),
               maxChildSize: 0.86,
-              builder: (context, scroll) =>
-                  TrainSheet(rail: rail, onLocate: _locate, scroll: scroll),
+              builder: (context, scroll) => TrainSheet(
+                rail: rail,
+                onLocate: _locate,
+                scroll: scroll,
+                onExpand: () {
+                  if (_sheetController.isAttached) {
+                    _sheetController.animateTo(
+                      _sheetController.size > .65
+                          ? (150 / size.height).clamp(.42, .5).toDouble()
+                          : .82,
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOut,
+                    );
+                  }
+                },
+                onResize: (delta) {
+                  if (_sheetController.isAttached) {
+                    _sheetController.jumpTo(
+                      (_sheetController.size - delta / size.height)
+                          .clamp((150 / size.height).clamp(.28, .5), .86)
+                          .toDouble(),
+                    );
+                  }
+                },
+              ),
             ),
           ],
           if (rail.pending != null) _ConfirmCard(rail: rail),
         ],
       ),
     );
-  }
-}
-
-class _RunCard extends StatelessWidget {
-  const _RunCard({required this.rail});
-
-  final RailController rail;
-
-  @override
-  Widget build(BuildContext context) {
-    final scene = rail.scene;
-    final crossing = scene?.crossing;
-    final name = crossing?.name.isNotEmpty == true
-        ? crossing!.name
-        : (rail.selected?.name.isNotEmpty == true
-              ? rail.selected!.name
-              : "Level crossing");
-    final lead = scene != null && scene.trains.isNotEmpty
-        ? scene.trains.first
-        : null;
-    final message = rail.sceneLoading
-        ? "Opening the crossing…"
-        : rail.sceneMessage;
-    final colors = RailColors.of(context);
-    final text = Theme.of(context).textTheme;
-    return Material(
-      color: colors.sheet,
-      elevation: 8,
-      borderRadius: BorderRadius.circular(16),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text("ON THE MAP", style: railEyebrow(colors)),
-                  Text(name, style: text.headlineMedium),
-                  if (message != null)
-                    Text(
-                      message,
-                      style: text.bodyMedium?.copyWith(color: colors.muted),
-                    )
-                  else if (lead != null) ...[
-                    Text(
-                      _leadLine(lead),
-                      style: text.bodyMedium?.copyWith(color: colors.muted),
-                    ),
-                    Text(
-                      "The gate closes the road. The train keeps the track.",
-                      style: text.bodyMedium?.copyWith(color: colors.muted),
-                    ),
-                  ] else if (scene != null)
-                    Text(
-                      "No train is close enough to close this crossing. The track stays in view.",
-                      style: text.bodyMedium?.copyWith(color: colors.muted),
-                    ),
-                ],
-              ),
-            ),
-            TextButton(onPressed: rail.closeScene, child: const Text("Close")),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _leadLine(SceneTrain lead) {
-    final when = lead.etaMin <= 1
-        ? "closing now"
-        : "closes in ${lead.etaMin.round()} min";
-    final age = lead.ageMin >= 8 ? " · last reported" : "";
-    final bracket = lead.bracket.isEmpty ? "" : " · ${lead.bracket}";
-    return "${lead.number} ${lead.name} · $when$age$bracket";
   }
 }
 

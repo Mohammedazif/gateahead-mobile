@@ -3,6 +3,7 @@ import "dart:convert";
 import "package:http/http.dart" as http;
 
 import "models.dart";
+import "device_store.dart";
 
 const defaultApiBase = String.fromEnvironment(
   "API_BASE",
@@ -10,7 +11,9 @@ const defaultApiBase = String.fromEnvironment(
 );
 
 class RailException implements Exception {
-  RailException(this.message);
+  RailException(this.message, {this.retryAt});
+
+  final DateTime? retryAt;
 
   final String message;
 
@@ -44,11 +47,17 @@ abstract class RailApi {
   Future<Scene> scene(double lat, double lon, String crossingId);
 }
 
-class HttpRailApi implements RailApi {
-  HttpRailApi({required this.base, http.Client? client})
+abstract class CommunityApi {
+  Future<List<Map<String, dynamic>>> reports(String id);
+  Future<List<Map<String, dynamic>>> report(Gate gate, String state);
+}
+
+class HttpRailApi implements RailApi, CommunityApi {
+  HttpRailApi({required this.base, http.Client? client, this.storage})
     : _client = client ?? http.Client();
 
   final String base;
+  final DeviceStore? storage;
   final http.Client _client;
 
   @override
@@ -118,6 +127,51 @@ class HttpRailApi implements RailApi {
     return Scene.parse(json);
   }
 
+  @override
+  Future<List<Map<String, dynamic>>> reports(String id) async {
+    final body = await _get("/reports", {
+      "crossing_id": id,
+    }, const Duration(seconds: 15));
+    return (body["reports"] as List? ?? [])
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> report(Gate gate, String state) async {
+    final id = await storage?.installationId();
+    if (id == null) {
+      throw RailException("Reports are unavailable on this device.");
+    }
+    final root = base.endsWith("/") ? base.substring(0, base.length - 1) : base;
+    final response = await _client
+        .post(
+          Uri.parse("$root/reports"),
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({
+            "crossing_id": gate.id,
+            "installation_id": id,
+            "state": state,
+            "lat": gate.lat,
+            "lon": gate.lon,
+          }),
+        )
+        .timeout(const Duration(seconds: 40));
+    if (response.statusCode != 200) {
+      throw RailException(
+        response.statusCode == 429
+            ? "Too many reports. Try again in a few minutes."
+            : "Could not send your report. Try again later.",
+      );
+    }
+    final body = jsonDecode(response.body) as Map;
+    return (body["reports"] as List? ?? [])
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+  }
+
   Future<Map<String, dynamic>> _get(
     String path,
     Map<String, String> query,
@@ -125,18 +179,55 @@ class HttpRailApi implements RailApi {
   ) async {
     final root = base.endsWith("/") ? base.substring(0, base.length - 1) : base;
     final uri = Uri.parse("$root$path").replace(queryParameters: query);
+    final cacheable = ["/gates", "/predict", "/scene"].contains(path);
+    final key = Uri(path: path, queryParameters: query).toString();
+    final saved = cacheable ? storage?.response(key) : null;
+    final predictionKey = Uri(
+      path: "/predict",
+      queryParameters: {"lat": query["lat"] ?? "", "lon": query["lon"] ?? ""},
+    ).toString();
+    final latestPrediction = path == "/scene"
+        ? storage?.response(predictionKey)
+        : null;
+    if (path == "/scene" &&
+        saved != null &&
+        (latestPrediction == null || !saved.at.isBefore(latestPrediction.at)) &&
+        DateTime.now().difference(saved.at).inSeconds < 90) {
+      return {...saved.data, "_saved_at": saved.at.millisecondsSinceEpoch};
+    }
+    final pausedUntil = storage?.read("paused-until");
+    if (["/predict", "/scene"].contains(path) &&
+        pausedUntil is int &&
+        pausedUntil > DateTime.now().millisecondsSinceEpoch) {
+      if (saved != null) return saved.restored();
+      throw RailException(
+        "Checks are paused. Try again in a few minutes.",
+        retryAt: DateTime.fromMillisecondsSinceEpoch(pausedUntil),
+      );
+    }
     late http.Response response;
     try {
       response = await _client.get(uri).timeout(timeout);
     } catch (_) {
+      if (saved != null) return saved.restored();
       throw RailException(
         "Could not reach the service at $base. Try again in a moment.",
       );
     }
     if (response.statusCode == 429) {
-      throw RailException("Too many checks. Wait a few minutes and try again.");
+      final seconds =
+          int.tryParse(response.headers["retry-after"] ?? "") ?? 600;
+      await storage?.write(
+        "paused-until",
+        DateTime.now().add(Duration(seconds: seconds)).millisecondsSinceEpoch,
+      );
+      throw RailException(
+        "Too many checks. Automatic checks are paused; try again in a few minutes.",
+        retryAt: DateTime.now().add(Duration(seconds: seconds)),
+      );
     }
     if (response.statusCode != 200) {
+      if (saved != null && response.statusCode >= 500) return saved.restored();
       throw RailException(
         "Could not reach the service at $base. Try again in a moment.",
       );
@@ -147,6 +238,17 @@ class HttpRailApi implements RailApi {
         "Could not reach the service at $base. Try again in a moment.",
       );
     }
-    return decoded.map((key, value) => MapEntry(key.toString(), value));
+    final data = decoded.map((key, value) => MapEntry(key.toString(), value));
+    if (cacheable &&
+        saved != null &&
+        data["error"] != null &&
+        data["error"] != "") {
+      return saved.restored();
+    }
+    if (cacheable && (data["error"] == null || data["error"] == "")) {
+      final at = await storage?.saveResponse(key, data) ?? DateTime.now();
+      return {...data, "_saved_at": at.millisecondsSinceEpoch};
+    }
+    return data;
   }
 }
