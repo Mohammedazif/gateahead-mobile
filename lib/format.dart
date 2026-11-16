@@ -231,6 +231,11 @@ List<Gate> markGates(
         lon: gate.lon,
         km: gate.km,
         source: gate.source,
+        groupId: gate.groupId,
+        groupName: gate.groupName,
+        groupSize: gate.groupSize,
+        road: gate.road,
+        area: gate.area,
         status: uncertain.contains(gate.id)
             ? "uncertain"
             : marks[gate.id]?.status,
@@ -256,6 +261,112 @@ List<Gate> shownGates(List<Gate> gates) {
   return [...hot, ...rest];
 }
 
+/// A presentation group. Every member retains its own scene, ID and estimate.
+class PhysicalCrossing {
+  PhysicalCrossing(this.members);
+
+  final List<Gate> members;
+  Gate get first => members.first;
+  String get key => first.groupId.isEmpty ? "gate:${first.id}" : first.groupId;
+  String get name => first.groupName.isNotEmpty
+      ? first.groupName
+      : first.name.isNotEmpty
+      ? first.name
+      : "Level crossing";
+  double get km =>
+      members.map((gate) => gate.km).reduce((a, b) => a < b ? a : b);
+  bool get active =>
+      members.any((gate) => gate.eta != null || gate.status == "uncertain");
+  List<Gate> get timed =>
+      members
+          .where((gate) => gate.eta != null && gate.status != "uncertain")
+          .toList()
+        ..sort((a, b) => a.eta!.compareTo(b.eta!));
+  int get uncertainCount =>
+      members.where((gate) => gate.status == "uncertain").length;
+}
+
+List<PhysicalCrossing> physicalCrossings(List<Gate> gates) {
+  final groups = <String, List<Gate>>{};
+  for (final gate in gates) {
+    final key = gate.groupId.isEmpty
+        ? "gate:${gate.id}"
+        : "group:${gate.groupId}";
+    groups.putIfAbsent(key, () => []).add(gate);
+  }
+  return [for (final members in groups.values) PhysicalCrossing(members)];
+}
+
+List<PhysicalCrossing> shownCrossings(List<Gate> gates) {
+  final ranked = physicalCrossings(gates)
+    ..sort((a, b) {
+      final hot = (a.active ? 0 : 1).compareTo(b.active ? 0 : 1);
+      if (hot != 0) return hot;
+      if (a.timed.isNotEmpty && b.timed.isNotEmpty) {
+        final eta = a.timed.first.eta!.compareTo(b.timed.first.eta!);
+        if (eta != 0) return eta;
+      }
+      return a.km.compareTo(b.km);
+    });
+  return [
+    ...ranked.where((crossing) => crossing.active),
+    ...ranked.where((crossing) => !crossing.active).take(12),
+  ];
+}
+
+/// Only rows entirely mapped to the same explicit crossing group can combine.
+/// A run ID (or its date-aware fallback) also forms part of the key.
+class CrossingApproaches {
+  CrossingApproaches(this.rows, {this.name = "", this.groupId = ""});
+  final List<Approach> rows;
+  final String name, groupId;
+  Set<String> get ids => {for (final row in rows) ...row.ids};
+  bool get grouped => groupId.isNotEmpty && ids.length > 1;
+}
+
+List<CrossingApproaches> crossingApproaches(
+  List<Approach> rows,
+  List<Gate> gates,
+) {
+  final byId = {for (final gate in gates) gate.id: gate};
+  final groups = <String, CrossingApproaches>{};
+  for (var i = 0; i < rows.length; i++) {
+    final row = rows[i];
+    final members = [for (final id in row.ids) byId[id]];
+    final groupId =
+        members.isNotEmpty &&
+            members.every((gate) => gate != null && gate.groupId.isNotEmpty) &&
+            members.map((gate) => gate!.groupId).toSet().length == 1
+        ? members.first!.groupId
+        : "";
+    final key = groupId.isEmpty ? "row:$i" : "${row.identity}:$groupId";
+    final first = members.firstOrNull;
+    groups
+        .putIfAbsent(
+          key,
+          () => CrossingApproaches(
+            [],
+            groupId: groupId,
+            name: first?.groupName.isNotEmpty == true
+                ? first!.groupName
+                : row.cluster.isEmpty
+                ? "Level crossing"
+                : row.cluster,
+          ),
+        )
+        .rows
+        .add(row);
+  }
+  return [
+    for (final group in groups.values)
+      if (group.ids.length > 1)
+        group
+      else
+        for (final row in group.rows)
+          CrossingApproaches([row], name: group.name, groupId: group.groupId),
+  ];
+}
+
 Map<String, List<Approach>> groupApproaches(List<Approach> rows) {
   final grouped = <String, List<Approach>>{};
   for (final row in rows) {
@@ -265,6 +376,54 @@ Map<String, List<Approach>> groupApproaches(List<Approach> rows) {
     list.sort((a, b) => a.eta.compareTo(b.eta));
   }
   return grouped;
+}
+
+/// Cluster estimates cannot supply separate timings for all their track nodes.
+/// Prefer the exact rows for this journey; older replies still use their cluster row.
+List<Approach> trainCrossingRows(Predict predict, List<Gate> gates) {
+  final byId = {for (final gate in gates) gate.id: gate};
+  final result = <Approach>[];
+  for (final entry in groupApproaches(predict.approaching).entries) {
+    final exact = <String, GatePrediction>{};
+    for (final row in predict.gatePredictions ?? const <GatePrediction>[]) {
+      if (row.identity != entry.key) continue;
+      final old = exact[row.id];
+      if (old == null || row.eta < old.eta) exact[row.id] = row;
+    }
+    if (exact.isEmpty) {
+      result.addAll(entry.value);
+      continue;
+    }
+    for (final row in exact.values) {
+      final original = entry.value.firstWhere(
+        (approach) => approach.ids.contains(row.id),
+        orElse: () => entry.value.first,
+      );
+      final gate = byId[row.id];
+      result.add(
+        Approach(
+          runId: original.runId,
+          startDate: original.startDate,
+          train: original.train,
+          name: original.name,
+          cluster: gate?.name ?? original.cluster,
+          count: 1,
+          eta: row.eta,
+          status: row.status,
+          fromYouKm: gate?.km ?? original.fromYouKm,
+          lat: gate?.lat ?? original.lat,
+          lon: gate?.lon ?? original.lon,
+          ids: [row.id],
+          runInfo: original.runInfo,
+          bracket: original.bracket,
+          closesIn: row.closesIn,
+          ageMin: original.ageMin,
+          basis: original.basis,
+        ),
+      );
+    }
+  }
+  return result;
 }
 
 List<Sighting> lineSightings(Predict predict) {

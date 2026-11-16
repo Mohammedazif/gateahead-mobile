@@ -20,6 +20,11 @@ class Gate {
     required this.lon,
     required this.km,
     required this.source,
+    this.groupId = "",
+    this.groupName = "",
+    this.groupSize = 1,
+    this.road = "",
+    this.area = "",
     this.status,
     this.eta,
     this.closesIn,
@@ -31,6 +36,10 @@ class Gate {
   final double lon;
   final double km;
   final String source;
+
+  /// Explicit same-road grouping from the crossing catalogue. Raw IDs stay distinct.
+  final String groupId, groupName, road, area;
+  final int groupSize;
   final String? status;
   final double? eta;
 
@@ -47,6 +56,11 @@ class Gate {
       lon: lon,
       km: km,
       source: source,
+      groupId: groupId,
+      groupName: groupName,
+      groupSize: groupSize,
+      road: road,
+      area: area,
       status: status ?? this.status,
       eta: eta ?? this.eta,
       closesIn: closesIn ?? this.closesIn,
@@ -66,6 +80,13 @@ class Gate {
       lon: lon,
       km: _maybeNum(json["km"]) ?? 0,
       source: _str(json["source"]),
+      groupId: json["group_id"] is String ? json["group_id"] : "",
+      groupName: json["group_name"] is String ? json["group_name"] : "",
+      groupSize: json["group_size"] is int && json["group_size"] > 0
+          ? json["group_size"]
+          : 1,
+      road: json["road"] is String ? json["road"] : "",
+      area: json["area"] is String ? json["area"] : "",
     );
   }
 }
@@ -160,7 +181,7 @@ class Approach {
   String get identity => runId.isNotEmpty
       ? runId
       : startDate.isNotEmpty
-      ? "${train}:$startDate"
+      ? "$train:$startDate"
       : train;
 
   static Approach? tryParse(Object? raw) {
@@ -212,7 +233,7 @@ class Passed {
   String get identity => runId.isNotEmpty
       ? runId
       : startDate.isNotEmpty
-      ? "${train}:$startDate"
+      ? "$train:$startDate"
       : train;
 
   static Passed? tryParse(Object? raw) {
@@ -255,7 +276,7 @@ class Sighting {
   String get identity => runId.isNotEmpty
       ? runId
       : startDate.isNotEmpty
-      ? "${number}:$startDate"
+      ? "$number:$startDate"
       : number;
 
   static Sighting? tryParse(Object? raw) {
@@ -291,7 +312,7 @@ class GatePrediction {
   String get identity => runId.isNotEmpty
       ? runId
       : startDate.isNotEmpty
-      ? "${train}:$startDate"
+      ? "$train:$startDate"
       : train;
 
   static GatePrediction? tryParse(Object? raw) {
@@ -328,7 +349,7 @@ class AwaitingTrain {
   String get identity => runId.isNotEmpty
       ? runId
       : startDate.isNotEmpty
-      ? "${number}:$startDate"
+      ? "$number:$startDate"
       : number;
 
   static AwaitingTrain? tryParse(Object? raw) {
@@ -512,7 +533,7 @@ class SceneTrain {
   String get identity => runId.isNotEmpty
       ? runId
       : startDate.isNotEmpty
-      ? "${number}:$startDate"
+      ? "$number:$startDate"
       : number;
 
   static SceneTrain? tryParse(Object? raw) {
@@ -652,7 +673,7 @@ class ScenePassed {
   String get identity => runId.isNotEmpty
       ? runId
       : startDate.isNotEmpty
-      ? "${number}:$startDate"
+      ? "$number:$startDate"
       : number;
 
   static ScenePassed? tryParse(Object? raw) {

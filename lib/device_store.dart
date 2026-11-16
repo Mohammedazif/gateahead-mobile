@@ -18,6 +18,11 @@ class SavedGate {
       "lon": gate.lon,
       "km": gate.km,
       "source": gate.source,
+      "group_id": gate.groupId,
+      "group_name": gate.groupName,
+      "group_size": gate.groupSize,
+      "road": gate.road,
+      "area": gate.area,
     },
     "label": label,
     "lat": place.lat,
@@ -266,6 +271,15 @@ bool validResponseBody(String path, Map<String, dynamic> data) {
         for (final key in ["run_id", "start_date"]) {
           if (row[key] != null && row[key] is! String) return false;
         }
+        if (field == "gates") {
+          for (final key in ["group_id", "group_name", "road", "area"]) {
+            if (row[key] != null && row[key] is! String) return false;
+          }
+          if (row["group_size"] != null &&
+              (row["group_size"] is! int || row["group_size"] < 1)) {
+            return false;
+          }
+        }
       }
       if (field == "service_updates" &&
           (row is! Map ||
@@ -274,8 +288,9 @@ bool validResponseBody(String path, Map<String, dynamic> data) {
                 "cancelled",
                 "diverted",
                 "partially_cancelled",
-              ].contains(row["status"])))
+              ].contains(row["status"]))) {
         return false;
+      }
     }
   }
   return true;

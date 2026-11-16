@@ -86,7 +86,8 @@ class _TrainSheetState extends State<TrainSheet> {
     final colors = RailColors.of(context);
     final text = Theme.of(context).textTheme;
     final gates = rail.markedGates;
-    final shown = shownGates(gates);
+    final shown = shownCrossings(gates);
+    final crossingCount = physicalCrossings(gates).length;
     final horizontal = widget.docked ? 22.0 : 18.0;
     return DecoratedBox(
       key: const ValueKey("train-sheet-surface"),
@@ -191,8 +192,10 @@ class _TrainSheetState extends State<TrainSheet> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
+                              Wrap(
+                                alignment: WrapAlignment.center,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 6,
                                 children: [
                                   Icon(switch (tab) {
                                     _SheetTab.nearby =>
@@ -200,12 +203,11 @@ class _TrainSheetState extends State<TrainSheet> {
                                     _SheetTab.trains => Icons.train_outlined,
                                     _SheetTab.saved => Icons.bookmark_border,
                                   }, size: 18),
-                                  const SizedBox(width: 6),
                                   Text(switch (tab) {
                                     _SheetTab.nearby => "Nearby",
                                     _SheetTab.trains => "Trains",
                                     _SheetTab.saved => "Saved",
-                                  }),
+                                  }, textAlign: TextAlign.center),
                                 ],
                               ),
                               const SizedBox(height: 8),
@@ -290,17 +292,24 @@ class _TrainSheetState extends State<TrainSheet> {
                         ),
                       if (shown.isNotEmpty) ...[
                         const SizedBox(height: 18),
-                        for (final gate in shown) ...[
-                          _GateRow(
-                            gate: gate,
-                            selected: gate.id == rail.selected?.id,
-                            onTap: () => rail.openGate(gate),
-                          ),
+                        for (final crossing in shown) ...[
+                          if (crossing.members.length == 1)
+                            _GateRow(
+                              gate: crossing.first,
+                              selected: crossing.first.id == rail.selected?.id,
+                              onTap: () => rail.openGate(crossing.first),
+                            )
+                          else
+                            _GateGroupRow(
+                              key: ValueKey("physical:${crossing.key}"),
+                              crossing: crossing,
+                              rail: rail,
+                            ),
                           const SizedBox(height: 10),
                         ],
-                        if (gates.length > shown.length)
+                        if (crossingCount > shown.length)
                           Text(
-                            "${gates.length - shown.length} more crossings are marked on the map.",
+                            "${crossingCount - shown.length} more crossings are marked on the map.",
                             style: text.bodySmall?.copyWith(
                               color: colors.muted,
                             ),
@@ -326,7 +335,7 @@ class _TrainSheetState extends State<TrainSheet> {
                           "Saved check · ${rail.checkedAt?.toLocal()}. Timings may have changed.",
                         ),
                       if (rail.predict != null)
-                        PredictBody(predict: rail.predict!)
+                        PredictBody(predict: rail.predict!, gates: gates)
                       else
                         _EmptyState(
                           icon: Icons.train_outlined,
@@ -368,7 +377,7 @@ class _TrainSheetState extends State<TrainSheet> {
     if (rail.gatesNote != null) {
       return "${prefix}Crossings for this place did not load.";
     }
-    final count = rail.gates.length;
+    final count = physicalCrossings(rail.gates).length;
     if (count == 0) return "${prefix}No railway crossings on the map here.";
     return "$prefix$count ${count == 1 ? 'crossing' : 'crossings'} on this map.";
   }
@@ -498,6 +507,14 @@ class _CrossingDetails extends StatelessWidget {
           "${gate.km.toStringAsFixed(1)} km from your search point",
           style: text.bodySmall?.copyWith(color: colors.muted),
         ),
+        if (gate.groupId.isNotEmpty && gate.groupSize > 1)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              "Track crossing ${gate.id} · part of ${gate.groupSize} track crossings on this road",
+              style: text.bodySmall?.copyWith(color: colors.muted),
+            ),
+          ),
         if (rail.sceneLoading)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 20),
@@ -599,9 +616,10 @@ class _CrossingDetails extends StatelessWidget {
 }
 
 class PredictBody extends StatelessWidget {
-  const PredictBody({super.key, required this.predict});
+  const PredictBody({super.key, required this.predict, this.gates = const []});
 
   final Predict predict;
+  final List<Gate> gates;
 
   @override
   Widget build(BuildContext context) {
@@ -616,7 +634,7 @@ class PredictBody extends StatelessWidget {
         ),
       );
     }
-    final grouped = groupApproaches(predict.approaching);
+    final grouped = groupApproaches(trainCrossingRows(predict, gates));
     final sightings = lineSightings(predict);
     final passed = predict.passed.take(6).toList();
     if (grouped.isEmpty && sightings.isEmpty && passed.isEmpty) {
@@ -656,6 +674,7 @@ class PredictBody extends StatelessWidget {
             _TrainBlock(
               number: entry.value.first.train,
               rows: entry.value,
+              gates: gates,
               otherReported: predict.awaitingUpdate.isNotEmpty,
             ),
         if (passed.isNotEmpty) ...[
@@ -689,23 +708,30 @@ class _TrainBlock extends StatelessWidget {
   const _TrainBlock({
     required this.number,
     required this.rows,
+    required this.gates,
     this.otherReported = false,
   });
   final String number;
   final List<Approach> rows;
+  final List<Gate> gates;
   final bool otherReported;
   @override
   Widget build(BuildContext context) {
     final colors = RailColors.of(context), text = Theme.of(context).textTheme;
     final head = rows.first;
-    Widget crossing(Approach row) => Padding(
+    final crossings = crossingApproaches(rows, gates);
+    Widget track(Approach row, {bool identify = false}) => Padding(
       padding: const EdgeInsets.only(top: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
             child: Text(
-              row.cluster.isEmpty ? "Level crossing" : row.cluster,
+              identify
+                  ? "${row.ids.length == 1 ? 'Track crossing' : 'Track crossings'} ${row.ids.join(', ')}"
+                  : row.cluster.isEmpty
+                  ? "Level crossing"
+                  : row.cluster,
               style: text.bodySmall,
             ),
           ),
@@ -720,6 +746,29 @@ class _TrainBlock extends StatelessWidget {
         ],
       ),
     );
+    Widget crossing(CrossingApproaches crossing) {
+      if (!crossing.grouped) return track(crossing.rows.first);
+      final earliest = crossing.rows.first;
+      final uncertain = crossing.rows.any(
+        (row) =>
+            row.status == "uncertain" ||
+            gateLabel(row.eta, row.closesIn, row.status) ==
+                "train timing uncertain",
+      );
+      return ExpansionTile(
+        key: ValueKey("train-crossing:${head.identity}:${crossing.groupId}"),
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(bottom: 10),
+        dense: true,
+        title: Text(crossing.name, style: text.bodySmall),
+        subtitle: Text(
+          "${crossing.ids.length} track crossings · ${uncertain ? 'Track timing uncertain' : 'Earliest estimate: ${gateLabel(earliest.eta, earliest.closesIn, earliest.status)}'}",
+          style: text.bodySmall?.copyWith(color: colors.muted),
+        ),
+        children: [for (final row in crossing.rows) track(row, identify: true)],
+      );
+    }
+
     return Container(
       margin: const EdgeInsets.only(top: 12),
       padding: const EdgeInsets.all(16),
@@ -757,16 +806,16 @@ class _TrainBlock extends StatelessWidget {
             "${head.basis == 'timetable' ? 'Timetable estimate' : 'Train report'}${head.ageMin == null ? '' : ' · ${head.ageMin!.round()} min old at check'}",
             style: text.bodySmall?.copyWith(color: colors.muted),
           ),
-          for (final row in rows.take(2)) crossing(row),
-          if (rows.length > 2)
+          for (final row in crossings.take(2)) crossing(row),
+          if (crossings.length > 2)
             ExpansionTile(
               tilePadding: EdgeInsets.zero,
               dense: true,
               title: Text(
-                "${rows.length - 2} more crossings",
+                "${crossings.length - 2} more crossings",
                 style: text.bodySmall,
               ),
-              children: rows.skip(2).map(crossing).toList(),
+              children: crossings.skip(2).map(crossing).toList(),
             ),
           ExpansionTile(
             tilePadding: EdgeInsets.zero,
@@ -957,15 +1006,67 @@ class StatusPip extends StatelessWidget {
   }
 }
 
+class _GateGroupRow extends StatelessWidget {
+  const _GateGroupRow({super.key, required this.crossing, required this.rail});
+  final PhysicalCrossing crossing;
+  final RailController rail;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = RailColors.of(context), text = Theme.of(context).textTheme;
+    final timed = crossing.timed.firstOrNull;
+    final uncertain = crossing.uncertainCount;
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: crossing.active ? colors.accent : colors.line,
+        ),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        childrenPadding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+        shape: const Border(),
+        collapsedShape: const Border(),
+        title: Text(crossing.name, style: text.bodyMedium),
+        subtitle: Text(
+          [
+            "${crossing.members.length} track crossings · ${crossing.km.toStringAsFixed(1)} km away",
+            if (uncertain > 0)
+              "Position update needed on $uncertain ${uncertain == 1 ? 'track' : 'tracks'}",
+            if (timed != null)
+              "${uncertain > 0 ? 'Other track estimate' : 'Earliest track estimate'}: ${gateLabel(timed.eta!, timed.closesIn, timed.status)}",
+          ].join("\n"),
+          style: text.bodySmall?.copyWith(color: colors.muted),
+        ),
+        children: [
+          for (var i = 0; i < crossing.members.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: _GateRow(
+                gate: crossing.members[i],
+                label: "Track ${i + 1} · ${crossing.members[i].id}",
+                selected: crossing.members[i].id == rail.selected?.id,
+                onTap: () => rail.openGate(crossing.members[i]),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _GateRow extends StatelessWidget {
   const _GateRow({
     required this.gate,
     required this.selected,
     required this.onTap,
+    this.label,
   });
   final Gate gate;
   final bool selected;
   final VoidCallback onTap;
+  final String? label;
   @override
   Widget build(BuildContext context) {
     final colors = RailColors.of(context), text = Theme.of(context).textTheme;
@@ -1002,7 +1103,8 @@ class _GateRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      gate.name.isEmpty ? "Level crossing" : gate.name,
+                      label ??
+                          (gate.name.isEmpty ? "Level crossing" : gate.name),
                       style: text.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w500,
                       ),
