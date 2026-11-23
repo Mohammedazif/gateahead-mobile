@@ -297,6 +297,21 @@ List<PhysicalCrossing> physicalCrossings(List<Gate> gates) {
   return [for (final members in groups.values) PhysicalCrossing(members)];
 }
 
+String? trackCrossingLabel(Gate? gate, List<Gate> gates) {
+  if (gate == null || gate.groupId.isEmpty) return null;
+  final ids = gates
+      .where((item) => item.groupId == gate.groupId)
+      .map((item) => item.id)
+      .toList()
+    ..sort();
+  final size = ids.length > gate.groupSize ? ids.length : gate.groupSize;
+  if (size < 2) return null;
+  final index = ids.indexOf(gate.id);
+  return ids.length == size && index >= 0
+      ? "Track crossing ${index + 1} of $size"
+      : "Part of $size track crossings";
+}
+
 List<PhysicalCrossing> shownCrossings(List<Gate> gates) {
   final ranked = physicalCrossings(gates)
     ..sort((a, b) {

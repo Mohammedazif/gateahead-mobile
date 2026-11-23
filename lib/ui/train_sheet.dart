@@ -507,11 +507,11 @@ class _CrossingDetails extends StatelessWidget {
           "${gate.km.toStringAsFixed(1)} km from your search point",
           style: text.bodySmall?.copyWith(color: colors.muted),
         ),
-        if (gate.groupId.isNotEmpty && gate.groupSize > 1)
+        if (trackCrossingLabel(gate, rail.gates) case final String track)
           Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Text(
-              "Track crossing ${gate.id} · part of ${gate.groupSize} track crossings on this road",
+              track,
               style: text.bodySmall?.copyWith(color: colors.muted),
             ),
           ),
@@ -720,21 +720,13 @@ class _TrainBlock extends StatelessWidget {
     final colors = RailColors.of(context), text = Theme.of(context).textTheme;
     final head = rows.first;
     final crossings = crossingApproaches(rows, gates);
-    Widget track(Approach row, {bool identify = false}) => Padding(
+    final gatesById = {for (final gate in gates) gate.id: gate};
+    Widget track(Approach row, String label) => Padding(
       padding: const EdgeInsets.only(top: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Text(
-              identify
-                  ? "${row.ids.length == 1 ? 'Track crossing' : 'Track crossings'} ${row.ids.join(', ')}"
-                  : row.cluster.isEmpty
-                  ? "Level crossing"
-                  : row.cluster,
-              style: text.bodySmall,
-            ),
-          ),
+          Expanded(child: Text(label, style: text.bodySmall)),
           const SizedBox(width: 12),
           Flexible(
             child: Text(
@@ -747,7 +739,10 @@ class _TrainBlock extends StatelessWidget {
       ),
     );
     Widget crossing(CrossingApproaches crossing) {
-      if (!crossing.grouped) return track(crossing.rows.first);
+      if (!crossing.grouped) {
+        final row = crossing.rows.first;
+        return track(row, row.cluster.isEmpty ? "Level crossing" : row.cluster);
+      }
       final earliest = crossing.rows.first;
       final uncertain = crossing.rows.any(
         (row) =>
@@ -765,7 +760,16 @@ class _TrainBlock extends StatelessWidget {
           "${crossing.ids.length} track crossings · ${uncertain ? 'Track timing uncertain' : 'Earliest estimate: ${gateLabel(earliest.eta, earliest.closesIn, earliest.status)}'}",
           style: text.bodySmall?.copyWith(color: colors.muted),
         ),
-        children: [for (final row in crossing.rows) track(row, identify: true)],
+        children: [
+          for (final row in crossing.rows)
+            track(
+              row,
+              row.ids.length > 1
+                  ? "${row.ids.length} track crossings"
+                  : trackCrossingLabel(gatesById[row.ids.firstOrNull], gates) ??
+                        "Track crossing",
+            ),
+        ],
       );
     }
 
@@ -1045,7 +1049,10 @@ class _GateGroupRow extends StatelessWidget {
               padding: const EdgeInsets.only(top: 8),
               child: _GateRow(
                 gate: crossing.members[i],
-                label: "Track ${i + 1} · ${crossing.members[i].id}",
+                label: trackCrossingLabel(
+                  crossing.members[i],
+                  crossing.members,
+                ),
                 selected: crossing.members[i].id == rail.selected?.id,
                 onTap: () => rail.openGate(crossing.members[i]),
               ),

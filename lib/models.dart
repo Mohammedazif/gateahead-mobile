@@ -70,6 +70,7 @@ class Gate {
   static Gate? tryParse(Object? raw) {
     if (raw is! Map) return null;
     final json = _map(raw);
+    if (json["restricted_freight"] == true) return null;
     final lat = _maybeNum(json["lat"]);
     final lon = _maybeNum(json["lon"]);
     if (lat == null || lon == null) return null;

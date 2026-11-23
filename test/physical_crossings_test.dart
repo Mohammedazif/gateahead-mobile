@@ -412,18 +412,41 @@ void main() {
         find.textContaining("Other track estimate: closed · train in 2 min"),
         findsOneWidget,
       );
-      expect(find.text("Track 2 · osm:2"), findsNothing);
+      expect(find.text("Track crossing 2 of 2"), findsNothing);
       await _tap(tester, find.text("School Road crossing"));
-      expect(find.text("Track 1 · osm:1"), findsOneWidget);
-      expect(find.text("Track 2 · osm:2"), findsOneWidget);
-      await _tap(tester, find.text("Track 2 · osm:2"));
+      expect(find.text("Track crossing 1 of 2"), findsOneWidget);
+      expect(find.text("Track crossing 2 of 2"), findsOneWidget);
+      await _tap(tester, find.text("Track crossing 2 of 2"));
       expect(api.sceneIds, ["osm:2"]);
       expect(rail.selected?.id, "osm:2");
-      expect(
-        find.textContaining("Track crossing osm:2 · part of 2"),
-        findsOneWidget,
-      );
+      expect(find.textContaining("Track crossing 2 of 2"), findsOneWidget);
       expect(tester.takeException(), isNull);
+    },
+  );
+
+  test(
+    "older freight crossings stay hidden in offline maps and saved gates",
+    () async {
+      final freight = {
+        ..._gateJson(3, group: ""),
+        "id": "osm:4518094360",
+        "name": "FCI Godown crossing",
+        "restricted_freight": true,
+      };
+      final public = _gateJson(1);
+      final offline = GatesBody.parse({
+        "_offline": true,
+        "gates": [freight, public],
+      });
+      expect(offline.offline, isTrue);
+      expect(offline.gates.map((gate) => gate.id), ["osm:1"]);
+
+      final storage = DeviceStore(await SharedPreferences.getInstance());
+      await storage.write("favorites", [
+        for (final gate in [freight, public])
+          {"gate": gate, "label": gate["name"], "lat": 12, "lon": 75},
+      ]);
+      expect(storage.favorites().map((item) => item.gate.id), ["osm:1"]);
     },
   );
 
@@ -471,13 +494,13 @@ void main() {
         find.textContaining("2 track crossings · Earliest estimate:"),
         findsNWidgets(3),
       );
-      expect(find.text("Track crossing osm:1"), findsNothing);
+      expect(find.text("Track crossing 1 of 2"), findsNothing);
       await _tap(
         tester,
         find.byKey(const ValueKey("train-crossing:16512:2026-11-15:road:1")),
       );
-      expect(find.text("Track crossing osm:1"), findsOneWidget);
-      expect(find.text("Track crossing osm:2"), findsOneWidget);
+      expect(find.text("Track crossing 1 of 2"), findsOneWidget);
+      expect(find.text("Track crossing 2 of 2"), findsOneWidget);
       expect(find.text("closed · train in 2 min"), findsOneWidget);
       expect(find.text("closes in 1 min"), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -516,7 +539,7 @@ void main() {
       );
       await tester.scrollUntilVisible(find.text("School Road crossing"), 120);
       await _tap(tester, find.text("School Road crossing"));
-      await _tap(tester, find.text("Track 2 · osm:2"));
+      await _tap(tester, find.text("Track crossing 2 of 2"));
       expect(rail.selected?.id, "osm:2");
       expect(api.sceneIds, ["osm:2"]);
       expect(tester.takeException(), isNull);
