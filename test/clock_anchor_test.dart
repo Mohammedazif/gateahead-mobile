@@ -55,6 +55,8 @@ void main() {
             {
               "number": "16650",
               "eta_min": 3,
+              "along_km": .5,
+              "status": "closed",
               "age_min": 7,
               "movement": "stopped",
               "current": "Pazhayangadi",
@@ -99,6 +101,8 @@ void main() {
         {
           "number": "16650",
           "eta_min": 3,
+          "along_km": .5,
+          "status": "closed",
           "age_min": 7,
           "movement": "stopped",
           "snapshot_at": source.millisecondsSinceEpoch / 1000,
@@ -119,6 +123,8 @@ void main() {
         {
           "number": "16650",
           "eta_min": 3,
+          "along_km": .5,
+          "status": "closed",
           "age_min": 7,
           "movement": "stopped",
           "snapshot_at": received.millisecondsSinceEpoch / 1000,

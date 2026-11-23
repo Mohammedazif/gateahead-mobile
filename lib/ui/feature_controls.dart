@@ -122,7 +122,14 @@ class SavedGateControls extends StatelessWidget {
                 subtitle: Text(
                   item.gate.name.isEmpty ? "Level crossing" : item.gate.name,
                 ),
-                onTap: () => rail.openSaved(item),
+                onTap: () async {
+                  await rail.openSaved(item);
+                  final note = rail.selectionNote;
+                  if (context.mounted && note != null) {
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(SnackBar(content: Text(note)));
+                  }
+                },
                 trailing: PopupMenuButton<String>(
                   tooltip: "Manage ${item.label}",
                   onSelected: (action) async {
@@ -158,12 +165,15 @@ class SavedGateControls extends StatelessWidget {
                 action: "Open",
               ),
             );
-            if (value != null && !await rail.openLink(value) && context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text("That link has no valid crossing coordinates."),
-                ),
-              );
+            if (value == null) return;
+            final opened = await rail.openLink(value);
+            if (!context.mounted) return;
+            final note = opened
+                ? rail.selectionNote
+                : "That link has no valid crossing coordinates.";
+            if (note != null) {
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(SnackBar(content: Text(note)));
             }
           },
         ),
@@ -262,6 +272,29 @@ Future<void> showRailSettings(BuildContext context, RailController rail) =>
                         style: text.bodyMedium?.copyWith(color: colors.muted),
                       ),
                       RefreshControls(rail: rail),
+                      const SizedBox(height: 24),
+                      Text("Location history", style: text.titleMedium),
+                      const Text(
+                        "Clear your last location and recent checks on this device. Saved gates stay in your list.",
+                      ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                          onPressed: () async {
+                            final cleared = await rail.clearLocationHistory();
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    cleared ? "Location history cleared." : "Location history could not be cleared. Try again.",
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                          child: const Text("Clear location history"),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -360,6 +393,8 @@ class _GateActionsState extends State<GateActions> {
   List<Map<String, dynamic>> reports = [];
   String? message;
   Timer? _poll;
+  int _reportTicket = 0;
+  bool _reportsUnavailable = false;
   @override
   void initState() {
     super.initState();
@@ -379,11 +414,21 @@ class _GateActionsState extends State<GateActions> {
 
   Future<void> _load() async {
     final api = widget.rail.api;
-    if (api is! CommunityApi) return;
+    if (api is! CommunityApi || isLegacyCrossingId(widget.gate.id)) return;
+    final ticket = ++_reportTicket;
     try {
       final rows = await (api as CommunityApi).reports(widget.gate.id);
-      if (mounted) setState(() => reports = rows);
-    } catch (_) {}
+      if (mounted && ticket == _reportTicket) {
+        setState(() {
+          reports = rows;
+          _reportsUnavailable = false;
+        });
+      }
+    } catch (_) {
+      if (mounted && ticket == _reportTicket) {
+        setState(() => _reportsUnavailable = true);
+      }
+    }
   }
 
   @override
@@ -427,7 +472,7 @@ class _GateActionsState extends State<GateActions> {
               },
               child: const Text("Share"),
             ),
-            if (rail.api is CommunityApi)
+            if (rail.api is CommunityApi && !isLegacyCrossingId(gate.id))
               OutlinedButton(
                 onPressed: () async {
                   final rows =
@@ -443,9 +488,11 @@ class _GateActionsState extends State<GateActions> {
                         ),
                       );
                   if (rows != null && mounted) {
+                    _reportTicket++;
                     setState(() {
                       reports = rows;
                       message = "Report saved for 10 minutes.";
+                      _reportsUnavailable = false;
                     });
                   }
                 },
@@ -460,7 +507,15 @@ class _GateActionsState extends State<GateActions> {
             "Community reports${recent.isEmpty ? '' : ' (${recent.length})'}",
           ),
           children: [
-            if (recent.isEmpty)
+            if (_reportsUnavailable)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: _load,
+                  child: const Text("Reports did not load. Retry"),
+                ),
+              )
+            else if (recent.isEmpty)
               const Align(
                 alignment: Alignment.centerLeft,
                 child: Text("No recent reports for this crossing."),
@@ -513,7 +568,9 @@ class _GateReportSheetState extends State<_GateReportSheet> {
     });
     try {
       final rows = await widget.api.report(widget.gate, state);
-      if (mounted) Navigator.pop(context, rows);
+      if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+        Navigator.pop(context, rows);
+      }
     } catch (_) {
       if (mounted) {
         setState(() => _error = "Could not send your report. Try again later.");

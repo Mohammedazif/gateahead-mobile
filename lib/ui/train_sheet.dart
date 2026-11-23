@@ -35,6 +35,7 @@ class _TrainSheetState extends State<TrainSheet> {
   _SheetTab _tab = _SheetTab.nearby;
   String? _gateId;
   Spot? _place;
+  bool _showAllCrossings = false;
   RailController get rail => widget.rail;
   @override
   void initState() {
@@ -62,6 +63,7 @@ class _TrainSheetState extends State<TrainSheet> {
   void _changed() {
     if (!mounted) return;
     final focusChanged = _gateId != rail.selected?.id || _place != rail.place;
+    if (_place != rail.place) _showAllCrossings = false;
     if (_place != rail.place ||
         (_gateId != rail.selected?.id && rail.selected != null)) {
       _tab = _SheetTab.nearby;
@@ -86,7 +88,7 @@ class _TrainSheetState extends State<TrainSheet> {
     final colors = RailColors.of(context);
     final text = Theme.of(context).textTheme;
     final gates = rail.markedGates;
-    final shown = shownCrossings(gates);
+    final shown = shownCrossings(gates, showAll: _showAllCrossings);
     final crossingCount = physicalCrossings(gates).length;
     final horizontal = widget.docked ? 22.0 : 18.0;
     return DecoratedBox(
@@ -274,7 +276,14 @@ class _TrainSheetState extends State<TrainSheet> {
                         const _Notice(
                           "Saved crossing locations · map tiles need a connection.",
                         ),
-                      if (rail.gatesNote != null) _Notice(rail.gatesNote!),
+                      if (rail.gatesNote != null) ...[
+                        _Notice(rail.gatesNote!),
+                        TextButton.icon(
+                          onPressed: rail.loadingGates ? null : rail.retryGates,
+                          icon: const Icon(Icons.refresh, size: 18),
+                          label: const Text("Retry crossing lookup"),
+                        ),
+                      ],
                       if (rail.place == null)
                         _EmptyState(
                           icon: Icons.location_on_outlined,
@@ -308,11 +317,10 @@ class _TrainSheetState extends State<TrainSheet> {
                           const SizedBox(height: 10),
                         ],
                         if (crossingCount > shown.length)
-                          Text(
-                            "${crossingCount - shown.length} more crossings are marked on the map.",
-                            style: text.bodySmall?.copyWith(
-                              color: colors.muted,
-                            ),
+                          TextButton(
+                            onPressed: () =>
+                                setState(() => _showAllCrossings = true),
+                            child: Text("Show all $crossingCount crossings"),
                           ),
                       ],
                     ],
@@ -374,7 +382,7 @@ class _TrainSheetState extends State<TrainSheet> {
     }
     final prefix = rail.placeLabel == null ? "" : "${rail.placeLabel} · ";
     if (rail.loadingGates) return "${prefix}Looking up crossings…";
-    if (rail.gatesNote != null) {
+    if (rail.gatesNote != null && rail.gates.isEmpty) {
       return "${prefix}Crossings for this place did not load.";
     }
     final count = physicalCrossings(rail.gates).length;
@@ -469,8 +477,20 @@ class _AwaitingUpdates extends StatelessWidget {
   Widget build(BuildContext context) => trains.isEmpty
       ? const SizedBox.shrink()
       : _Notice(
-          "Position update needed\n${trains.map((train) => '${train.number} ${train.name} · last reported stopped at ${train.current}, report ${train.ageMin.round()} min old').join('\n')}\nPassage has not been confirmed. The barrier’s position is unknown.",
+          "Position update needed\n${trains.map(_lastReport).join('\n')}\nPassage has not been confirmed. The barrier’s position is unknown.",
         );
+
+  static String _lastReport(AwaitingTrain train) {
+    final who = "${train.number} ${train.name}";
+    final place = train.current.isEmpty ? "" : " at ${train.current}";
+    if (train.reason == "unknown_report_age") {
+      return "$who · last reported$place, report age unknown";
+    }
+    final previous = train.reason == "stopped_report"
+        ? "last reported stopped at ${train.current.isEmpty ? 'the station' : train.current}"
+        : "last reported$place";
+    return "$who · $previous, report ${train.ageMin.round()} min old";
+  }
 }
 
 class _CrossingDetails extends StatelessWidget {
@@ -520,17 +540,25 @@ class _CrossingDetails extends StatelessWidget {
             padding: EdgeInsets.symmetric(vertical: 20),
             child: Text("Checking this crossing…"),
           )
-        else if (rail.sceneMessage != null)
-          _Notice(rail.sceneMessage!)
         else ...[
-          if (rail.sceneHistorical)
+          if (rail.sceneMessage != null) ...[
+            _Notice(rail.sceneMessage!),
+            TextButton.icon(
+              onPressed: () => rail.openGate(gate),
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text("Retry crossing check"),
+            ),
+          ],
+          if (scene?.mapWarning.isNotEmpty == true && rail.sceneMessage == null)
+            _Notice(mapWarningLabel(scene!.mapAgeSeconds)),
+          if (rail.sceneHistorical && scene?.savedAt != null)
             _Notice(
               "Saved view · ${scene?.savedAt?.toLocal()}. Timings describe that check.",
             ),
           if (scene?.coverage?.notice case final String notice) _Notice(notice),
           _AwaitingUpdates(awaiting),
           _OperatingUpdates(scene?.serviceUpdates ?? const []),
-          if (lead != null || awaiting.isEmpty)
+          if (scene?.available == true && (lead != null || awaiting.isEmpty))
             Container(
               margin: const EdgeInsets.only(top: 20),
               padding: const EdgeInsets.all(18),
@@ -557,7 +585,9 @@ class _CrossingDetails extends StatelessWidget {
                   const SizedBox(height: 10),
                   Text(
                     lead == null
-                        ? "No approaching train reported"
+                        ? (scene!.incomplete
+                              ? "The latest check is incomplete"
+                              : "No approaching train reported")
                         : lead.status == "closed" &&
                               lead.etaMin <= 0 &&
                               !lead.positionOnSegment
@@ -580,7 +610,9 @@ class _CrossingDetails extends StatelessWidget {
                       ),
                     const SizedBox(height: 6),
                     Text(
-                      "${lead.basis == 'timetable' ? 'Timetable estimate' : 'Train report'} ${lead.ageMin.round()} min old at check",
+                      lead.observed == false
+                          ? "Scheduled estimate"
+                          : "${lead.basis == 'timetable' ? 'Timetable estimate' : 'Train report'} ${lead.ageMin.round()} min old at check",
                       style: text.bodySmall?.copyWith(color: colors.muted),
                     ),
                     if (lead.bracket.isNotEmpty)
@@ -643,6 +675,8 @@ class PredictBody extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (predict.mapWarning.isNotEmpty)
+              _Notice(mapWarningLabel(predict.mapAgeSeconds)),
             if (predict.coverage?.notice case final String notice)
               _Notice(notice),
             _AwaitingUpdates(predict.awaitingUpdate),
@@ -650,7 +684,9 @@ class PredictBody extends StatelessWidget {
             if (predict.awaitingUpdate.isEmpty &&
                 predict.serviceUpdates.isEmpty)
               Text(
-                "No live trains reported on this stretch right now.",
+                predict.incomplete
+                    ? "Some train checks are incomplete. The barrier’s position is unknown."
+                    : "No live trains reported on this stretch right now.",
                 style: text.bodyMedium?.copyWith(color: colors.muted),
               ),
           ],
@@ -661,7 +697,11 @@ class PredictBody extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 16),
+        if (predict.mapWarning.isNotEmpty)
+          _Notice(mapWarningLabel(predict.mapAgeSeconds)),
         if (predict.coverage?.notice case final String notice) _Notice(notice),
+        if (predict.gatePredictions?.any((row) => row.earlierEstimate) == true)
+          const _Notice("This list includes estimates from an earlier check."),
         _AwaitingUpdates(predict.awaitingUpdate),
         _OperatingUpdates(predict.serviceUpdates),
         if (grouped.isEmpty && predict.awaitingUpdate.isEmpty)
@@ -807,7 +847,9 @@ class _TrainBlock extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            "${head.basis == 'timetable' ? 'Timetable estimate' : 'Train report'}${head.ageMin == null ? '' : ' · ${head.ageMin!.round()} min old at check'}",
+            head.observed == false
+                ? "Scheduled estimate"
+                : "${head.basis == 'timetable' ? 'Timetable estimate' : 'Train report'}${head.ageMin == null ? '' : ' · ${head.ageMin!.round()} min old at check'}",
             style: text.bodySmall?.copyWith(color: colors.muted),
           ),
           for (final row in crossings.take(2)) crossing(row),
@@ -991,7 +1033,9 @@ class StatusPip extends StatelessWidget {
     final quiet = status == "passed" || status == "later";
     final foreground = status == "closed"
         ? Colors.white
-        : (filled ? RailColors.inkDark : (quiet ? colors.muted : colors.amber));
+        : (filled
+              ? RailColors.inkDark
+              : (quiet ? colors.muted : colors.accent));
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
@@ -1039,7 +1083,11 @@ class _GateGroupRow extends StatelessWidget {
             if (uncertain > 0)
               "Position update needed on $uncertain ${uncertain == 1 ? 'track' : 'tracks'}",
             if (timed != null)
-              "${uncertain > 0 ? 'Other track estimate' : 'Earliest track estimate'}: ${gateLabel(timed.eta!, timed.closesIn, timed.status)}",
+              "${timed.earlierEstimate
+                  ? 'Previous track estimate'
+                  : uncertain > 0 && !timed.hasUncertainTrain
+                  ? 'Other track estimate'
+                  : 'Earliest track estimate'}: ${gateLabel(timed.eta!, timed.closesIn, timed.status)}",
           ].join("\n"),
           style: text.bodySmall?.copyWith(color: colors.muted),
         ),
@@ -1077,7 +1125,7 @@ class _GateRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = RailColors.of(context), text = Theme.of(context).textTheme;
-    final uncertain = gate.status == "uncertain";
+    final uncertain = gate.hasUncertainTrain || gate.status == "uncertain";
     final hot = gate.eta != null || uncertain;
     return Material(
       color: Colors.transparent,
@@ -1118,11 +1166,12 @@ class _GateRow extends StatelessWidget {
                     ),
                     const SizedBox(height: 5),
                     Text(
-                      "${gate.km.toStringAsFixed(1)} km away${uncertain
-                          ? ' · Position update needed'
-                          : gate.eta != null
-                          ? ' · Est. ${gateLabel(gate.eta!, gate.closesIn, gate.status)}'
-                          : ''}",
+                      [
+                        "${gate.km.toStringAsFixed(1)} km away",
+                        if (gate.eta != null)
+                          "${gate.earlierEstimate ? 'Earlier estimate' : 'Est.'} ${gateLabel(gate.eta!, gate.closesIn, gate.status)}",
+                        if (uncertain) "Position update needed",
+                      ].join(" · "),
                       style: text.bodySmall?.copyWith(color: colors.muted),
                     ),
                   ],

@@ -96,6 +96,7 @@ Scene _scene(
             "number": "16603",
             "name": "Malabar",
             "eta_min": 12,
+            "along_km": .5,
             "closes_in_min": 7,
             "status": "approaching",
             "age_min": 1,

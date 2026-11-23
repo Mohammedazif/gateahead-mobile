@@ -10,6 +10,8 @@ import "package:http/http.dart" as http;
 import "package:http/testing.dart";
 import "package:shared_preferences/shared_preferences.dart";
 
+const _crossing = {"id": "osm:1", "lat": 12, "lon": 75};
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
@@ -76,7 +78,11 @@ void main() {
           return http.Response(
             jsonEncode(
               scene
-                  ? {"available": true, "trains": malformed ? {} : []}
+                  ? {
+                      "available": true,
+                      "crossing": _crossing,
+                      "trains": malformed ? {} : [],
+                    }
                   : {"gates": malformed ? {} : []},
             ),
             200,
@@ -215,7 +221,7 @@ void main() {
     await store.write("responses", {
       "/scene?lat=12.0&lon=75.0&crossing_id=osm%3A1": {
         "at": now - 1000,
-        "data": {"available": true, "trains": []},
+        "data": {"available": true, "crossing": _crossing, "trains": []},
       },
       "/predict?lat=12.0&lon=75.0": {
         "at": now,
@@ -228,7 +234,10 @@ void main() {
       storage: store,
       client: MockClient((request) async {
         calls++;
-        return http.Response('{"available":true,"trains":[]}', 200);
+        return http.Response(
+          jsonEncode({"available": true, "crossing": _crossing, "trains": []}),
+          200,
+        );
       }),
     );
     await api.scene(12, 75, "osm:1");

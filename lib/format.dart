@@ -1,4 +1,5 @@
 import "models.dart";
+import "timing.dart";
 
 String checkedAgo(DateTime at, DateTime now) {
   final minutes = now.difference(at).inMinutes;
@@ -30,6 +31,15 @@ String friendlyError(String? message) {
     return "That crossing is no longer on the map.";
   }
   return message;
+}
+
+String mapWarningLabel(double? ageSeconds) {
+  if (ageSeconds == null) {
+    return "The map could not be fully refreshed. Some crossings may be missing.";
+  }
+  final minutes = (ageSeconds / 60).floor();
+  final age = minutes < 1 ? "less than 1 min" : _span(minutes.toDouble());
+  return "Showing map data from $age ago. Some crossings may be missing.";
 }
 
 String formatSpot(double lat, double lon) {
@@ -173,15 +183,23 @@ List<Gate> markGates(
   Predict? predict, [
   List<Scene> checked = const [],
 ]) {
+  var evidence = predict;
+  if (checked.isNotEmpty) {
+    evidence = withGateChecks(
+      predict ?? const Predict(gatePredictions: []),
+      checked,
+      gates,
+    );
+  }
   final marks = <String, GatePrediction>{};
   final uncertain = {
-    for (final train in predict?.awaitingUpdate ?? const <AwaitingTrain>[])
+    for (final train in evidence?.awaitingUpdate ?? const <AwaitingTrain>[])
       ...train.ids,
   };
   final rows =
-      predict?.gatePredictions ??
+      evidence?.gatePredictions ??
       [
-        for (final row in predict?.approaching ?? const <Approach>[])
+        for (final row in evidence?.approaching ?? const <Approach>[])
           if (row.ids.length == 1)
             GatePrediction(
               id: row.ids.single,
@@ -192,36 +210,17 @@ List<Gate> markGates(
       ];
   for (final row in rows) {
     final previous = marks[row.id];
-    if (previous == null || row.eta < previous.eta) marks[row.id] = row;
-  }
-  for (final scene in checked) {
-    final id = scene.crossing?.id;
-    if (id == null ||
-        !scene.available ||
-        scene.offline ||
-        scene.error.isNotEmpty ||
-        (scene.savedAt?.millisecondsSinceEpoch ?? 0) <
-            (predict?.savedAt?.millisecondsSinceEpoch ??
-                predict?.generatedAt?.millisecondsSinceEpoch ??
-                0)) {
-      continue;
-    }
-    marks.remove(id);
-    uncertain.remove(id);
-    if (scene.awaitingUpdate.isNotEmpty) uncertain.add(id);
-    for (final train in scene.trains) {
-      final old = marks[id];
-      if (old == null || train.etaMin < old.eta) {
-        marks[id] = GatePrediction(
-          id: id,
-          train: train.number,
-          eta: train.etaMin,
-          closesIn: train.closesInMin,
-          status: train.status,
-        );
-      }
+    if (previous == null ||
+        row.eta < previous.eta ||
+        (row.eta == previous.eta &&
+            previous.earlierEstimate &&
+            !row.earlierEstimate)) {
+      marks[row.id] = row;
     }
   }
+  bool showEstimate(String id) =>
+      !uncertain.contains(id) ||
+      const ["closed", "closing_soon"].contains(marks[id]?.status);
   return [
     for (final gate in gates)
       Gate(
@@ -236,11 +235,11 @@ List<Gate> markGates(
         groupSize: gate.groupSize,
         road: gate.road,
         area: gate.area,
-        status: uncertain.contains(gate.id)
-            ? "uncertain"
-            : marks[gate.id]?.status,
-        eta: uncertain.contains(gate.id) ? null : marks[gate.id]?.eta,
-        closesIn: uncertain.contains(gate.id) ? null : marks[gate.id]?.closesIn,
+        status: showEstimate(gate.id) ? marks[gate.id]?.status : "uncertain",
+        eta: showEstimate(gate.id) ? marks[gate.id]?.eta : null,
+        closesIn: showEstimate(gate.id) ? marks[gate.id]?.closesIn : null,
+        hasUncertainTrain: uncertain.contains(gate.id),
+        earlierEstimate: marks[gate.id]?.earlierEstimate == true,
       ),
   ];
 }
@@ -282,8 +281,9 @@ class PhysicalCrossing {
           .where((gate) => gate.eta != null && gate.status != "uncertain")
           .toList()
         ..sort((a, b) => a.eta!.compareTo(b.eta!));
-  int get uncertainCount =>
-      members.where((gate) => gate.status == "uncertain").length;
+  int get uncertainCount => members
+      .where((gate) => gate.hasUncertainTrain || gate.status == "uncertain")
+      .length;
 }
 
 List<PhysicalCrossing> physicalCrossings(List<Gate> gates) {
@@ -299,11 +299,12 @@ List<PhysicalCrossing> physicalCrossings(List<Gate> gates) {
 
 String? trackCrossingLabel(Gate? gate, List<Gate> gates) {
   if (gate == null || gate.groupId.isEmpty) return null;
-  final ids = gates
-      .where((item) => item.groupId == gate.groupId)
-      .map((item) => item.id)
-      .toList()
-    ..sort();
+  final ids =
+      gates
+          .where((item) => item.groupId == gate.groupId)
+          .map((item) => item.id)
+          .toList()
+        ..sort();
   final size = ids.length > gate.groupSize ? ids.length : gate.groupSize;
   if (size < 2) return null;
   final index = ids.indexOf(gate.id);
@@ -312,7 +313,10 @@ String? trackCrossingLabel(Gate? gate, List<Gate> gates) {
       : "Part of $size track crossings";
 }
 
-List<PhysicalCrossing> shownCrossings(List<Gate> gates) {
+List<PhysicalCrossing> shownCrossings(
+  List<Gate> gates, {
+  bool showAll = false,
+}) {
   final ranked = physicalCrossings(gates)
     ..sort((a, b) {
       final hot = (a.active ? 0 : 1).compareTo(b.active ? 0 : 1);
@@ -323,6 +327,7 @@ List<PhysicalCrossing> shownCrossings(List<Gate> gates) {
       }
       return a.km.compareTo(b.km);
     });
+  if (showAll) return ranked;
   return [
     ...ranked.where((crossing) => crossing.active),
     ...ranked.where((crossing) => !crossing.active).take(12),

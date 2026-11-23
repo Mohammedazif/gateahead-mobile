@@ -101,6 +101,8 @@ class DeviceStore {
   DeviceStore(this.preferences, {this.namespace = ""});
   final SharedPreferences preferences;
   final String namespace;
+  int _historyGeneration = 0;
+  int get historyGeneration => _historyGeneration;
 
   dynamic read(String key) {
     try {
@@ -118,6 +120,19 @@ class DeviceStore {
         "gateahead:$namespace:$key",
         jsonEncode(value),
       );
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> clearLocationHistory() async {
+    _historyGeneration++;
+    try {
+      final removed = await Future.wait([
+        for (final key in ["last-place", "responses"])
+          preferences.remove("gateahead:$namespace:$key"),
+      ]);
+      return removed.every((result) => result);
     } catch (_) {
       return false;
     }
@@ -174,8 +189,13 @@ class DeviceStore {
       final at = storedDateTime(row["at"]);
       if (at == null) continue;
       final data = Map<String, dynamic>.from(row["data"]);
-      final path = Uri.tryParse(entry.key)?.path ?? "";
-      if (!validResponseBody(path, data) ||
+      final uri = Uri.tryParse(entry.key);
+      if (uri == null ||
+          !validResponseBody(
+            uri.path,
+            data,
+            crossingId: uri.queryParameters["crossing_id"],
+          ) ||
           (data["error"] != null && data["error"] != "")) {
         continue;
       }
@@ -231,8 +251,18 @@ bool _validClock(Object? value) =>
     value is String && RegExp(r"^([01]\d|2[0-3]):[0-5]\d$").hasMatch(value);
 
 /// Reject unusable cached containers before parsers or UI consumers see them.
-bool validResponseBody(String path, Map<String, dynamic> data) {
-  if (data["error"] is String && (data["error"] as String).isNotEmpty) {
+bool validResponseBody(
+  String path,
+  Map<String, dynamic> data, {
+  String? crossingId,
+}) {
+  for (final field in ["error", "map_warning"]) {
+    if (data[field] != null && data[field] is! String) return false;
+  }
+  final hasSceneIdentity =
+      path == "/scene" &&
+      (data["available"] == true || data["legacy_alias_resolved"] == true);
+  if ((data["error"] as String?)?.isNotEmpty == true && !hasSceneIdentity) {
     return true;
   }
   if (path == "/gates" && data["gates"] is! List) return false;
@@ -240,6 +270,18 @@ bool validResponseBody(String path, Map<String, dynamic> data) {
   if (path == "/scene" &&
       (data["available"] is! bool || data["trains"] is! List)) {
     return false;
+  }
+  if (hasSceneIdentity) {
+    final crossing = SceneCrossing.tryParse(data["crossing"]);
+    if (crossing == null ||
+        (crossingId != null &&
+            !sceneIdentityMatches(
+              crossingId,
+              crossing.id,
+              aliasResolved: data["legacy_alias_resolved"] == true,
+            ))) {
+      return false;
+    }
   }
   final fields = switch (path) {
     "/predict" => [
@@ -266,29 +308,49 @@ bool validResponseBody(String path, Map<String, dynamic> data) {
     if (rows == null) continue;
     if (rows is! List) return false;
     for (final row in rows) {
-      if (row is Map && row["ids"] != null && row["ids"] is! List) return false;
-      if (row is Map) {
-        for (final key in ["run_id", "start_date"]) {
-          if (row[key] != null && row[key] is! String) return false;
-        }
-        if (field == "gates") {
-          for (final key in ["group_id", "group_name", "road", "area"]) {
-            if (row[key] != null && row[key] is! String) return false;
-          }
-          if (row["group_size"] != null &&
-              (row["group_size"] is! int || row["group_size"] < 1)) {
-            return false;
-          }
-        }
+      if (field == "stations") {
+        if (row is! String) return false;
+        continue;
       }
-      if (field == "service_updates" &&
-          (row is! Map ||
-              row["number"] is! String ||
-              ![
+      if (field == "rail") {
+        if (row is! List ||
+            row.length < 2 ||
+            !validCoordinates(row[0], row[1])) {
+          return false;
+        }
+        continue;
+      }
+      if (row is! Map) return false;
+      if (row["ids"] != null &&
+          (row["ids"] is! List ||
+              (row["ids"] as List).any((id) => id is! String))) {
+        return false;
+      }
+      for (final key in ["run_id", "start_date"]) {
+        if (row[key] != null && row[key] is! String) return false;
+      }
+      if (row["observed"] != null && row["observed"] is! bool) return false;
+      final status = row["status"];
+      if (!(switch (field) {
+        "gates" => _validGateRow(row),
+        "approaching" => Approach.tryParse(row) != null,
+        "gate_predictions" => GatePrediction.tryParse(row) != null,
+        "awaiting_update" => AwaitingTrain.tryParse(row) != null,
+        "sightings" => row["number"] is String && row["number"] != "",
+        "trains" => SceneTrain.tryParse(row) != null,
+        "passed" =>
+          path == "/scene"
+              ? ScenePassed.tryParse(row) != null
+              : Passed.tryParse(row) != null,
+        "service_updates" =>
+          row["number"] is String &&
+              const [
                 "cancelled",
                 "diverted",
                 "partially_cancelled",
-              ].contains(row["status"]))) {
+              ].contains(status),
+        _ => true,
+      })) {
         return false;
       }
     }
@@ -296,12 +358,42 @@ bool validResponseBody(String path, Map<String, dynamic> data) {
   return true;
 }
 
+bool _validGateRow(Map row) =>
+    (row["restricted_freight"] == true || Gate.tryParse(row) != null) &&
+    (row["group_size"] == null ||
+        (row["group_size"] is int && row["group_size"] > 0)) &&
+    [
+      "group_id",
+      "group_name",
+      "road",
+      "area",
+    ].every((key) => row[key] == null || row[key] is String);
+
+final _legacyCrossingId = RegExp(r"^user:[0-9]+:[0-9]+$");
+final _opaqueCrossingId = RegExp(r"^pin:[0-9a-f]{32}$");
+
+bool isLegacyCrossingId(String id) => _legacyCrossingId.hasMatch(id);
+
+bool sceneIdentityMatches(
+  String requested,
+  String returned, {
+  required bool aliasResolved,
+}) =>
+    requested == returned ||
+    (aliasResolved &&
+        isLegacyCrossingId(requested) &&
+        _opaqueCrossingId.hasMatch(returned));
+
 String responseKey(String path, double lat, double lon) =>
     "$path?lat=$lat&lon=$lon";
 
 ({Spot place, String? gateId})? parseCrossingLink(String text) {
   final uri = Uri.tryParse(text.trim());
-  if (uri == null) return null;
+  if (uri == null ||
+      !uri.hasAuthority ||
+      !["http", "https"].contains(uri.scheme)) {
+    return null;
+  }
   final q = uri.queryParameters;
   final lat = double.tryParse(q["lat"] ?? q["mlat"] ?? "");
   final lon = double.tryParse(q["lon"] ?? q["mlon"] ?? "");
@@ -330,7 +422,7 @@ String crossingLink(Gate gate) {
           queryParameters: {
             "lat": "${gate.lat}",
             "lon": "${gate.lon}",
-            "gate": gate.id,
+            if (!isLegacyCrossingId(gate.id)) "gate": gate.id,
             "name": gate.name,
           },
         )

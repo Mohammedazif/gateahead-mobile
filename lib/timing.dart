@@ -1,4 +1,5 @@
 import "models.dart";
+import "geo.dart";
 
 // Keep plausible source timing, but do not mix an offset server clock with
 // this device's clock. Cached reads retain their original receipt timestamp.
@@ -20,7 +21,18 @@ double sceneReportAge(SceneTrain train, Scene scene, DateTime now) =>
     train.ageMin +
     _elapsedMinutes(_anchor(train.snapshotAt, scene.savedAt), now);
 
-/// A stopped report cannot establish passage while the device waits for a check.
+Map<String, Spot> sceneTrainPositions(Scene? scene, DateTime now) {
+  if (scene == null || scene.offline || scene.rail.length < 2) return {};
+  return {
+    for (final train in scene.trains)
+      if (train.observed != false &&
+          train.positionOnSegment &&
+          sceneReportAge(train, scene, now) < 8)
+        train.identity: pointAlongKm(scene.rail, train.alongKm),
+  };
+}
+
+/// An expired observation cannot establish passage while the device waits for a check.
 Predict? currentPrediction(Predict? snapshot, DateTime now) {
   if (snapshot == null || snapshot.offline) return snapshot;
   final elapsed = _elapsedMinutes(
@@ -29,8 +41,8 @@ Predict? currentPrediction(Predict? snapshot, DateTime now) {
   );
   final stale = <String, List<Approach>>{};
   for (final train in snapshot.approaching) {
-    if ((train.runInfo.atStation || train.runInfo.run == "at") &&
-        (train.ageMin ?? 0) + elapsed >= 8) {
+    final age = train.ageMin;
+    if (train.observed != false && age != null && age + elapsed >= 8) {
       stale.putIfAbsent(train.identity, () => []).add(train);
     }
   }
@@ -45,9 +57,10 @@ Predict? currentPrediction(Predict? snapshot, DateTime now) {
       runId: row.runId,
       startDate: row.startDate,
       name: row.name,
-      current: row.runInfo.current.isEmpty
-          ? "the station"
-          : row.runInfo.current,
+      current: row.runInfo.current,
+      reason: row.runInfo.atStation || row.runInfo.run == "at"
+          ? "stopped_report"
+          : "stale_report",
       ageMin: (row.ageMin ?? 0) + elapsed,
       ids: {
         ...?awaiting[entry.key]?.ids,
@@ -63,6 +76,8 @@ Predict? currentPrediction(Predict? snapshot, DateTime now) {
         ?.where((row) => !stale.containsKey(row.identity))
         .toList(),
     error: snapshot.error,
+    mapWarning: snapshot.mapWarning,
+    mapAgeSeconds: snapshot.mapAgeSeconds,
     crossings: snapshot.crossings,
     stations: snapshot.stations,
     checked: snapshot.checked,
@@ -85,8 +100,7 @@ Predict? currentPrediction(Predict? snapshot, DateTime now) {
 Scene? currentScene(Scene? snapshot, DateTime now) {
   if (snapshot == null || snapshot.offline) return snapshot;
   final stale = snapshot.trains.where(
-    (row) =>
-        row.movement == "stopped" && sceneReportAge(row, snapshot, now) >= 8,
+    (row) => row.observed != false && sceneReportAge(row, snapshot, now) >= 8,
   );
   if (stale.isEmpty) return snapshot;
   final awaiting = {
@@ -98,7 +112,8 @@ Scene? currentScene(Scene? snapshot, DateTime now) {
       runId: row.runId,
       startDate: row.startDate,
       name: row.name,
-      current: row.current.isEmpty ? "the station" : row.current,
+      current: row.current,
+      reason: row.movement == "stopped" ? "stopped_report" : "stale_report",
       ageMin: sceneReportAge(row, snapshot, now),
       ids: {
         ...?awaiting[row.identity]?.ids,
@@ -113,6 +128,8 @@ Scene? currentScene(Scene? snapshot, DateTime now) {
     coverage: snapshot.coverage,
     serviceUpdates: snapshot.serviceUpdates,
     error: snapshot.error,
+    mapWarning: snapshot.mapWarning,
+    mapAgeSeconds: snapshot.mapAgeSeconds,
     crossing: snapshot.crossing,
     rail: snapshot.rail,
     trains: snapshot.trains
@@ -123,6 +140,7 @@ Scene? currentScene(Scene? snapshot, DateTime now) {
         .toList(),
     offline: snapshot.offline,
     savedAt: snapshot.savedAt,
+    legacyAliasResolved: snapshot.legacyAliasResolved,
   );
 }
 
@@ -132,8 +150,23 @@ Predict? withGateChecks(
   List<Scene> checks,
   List<Gate> gates,
 ) {
-  if (snapshot == null || snapshot.gatePredictions == null) return snapshot;
-  var exact = [...snapshot.gatePredictions!];
+  if (snapshot == null || checks.isEmpty) return snapshot;
+  var exact = [
+    ...(snapshot.gatePredictions ??
+        [
+          for (final row in snapshot.approaching)
+            if (row.ids.length == 1)
+              GatePrediction(
+                id: row.ids.single,
+                train: row.train,
+                runId: row.runId,
+                startDate: row.startDate,
+                eta: row.eta,
+                closesIn: row.closesIn,
+                status: row.status,
+              ),
+        ]),
+  ];
   var approaching = [...snapshot.approaching];
   var awaiting = [...snapshot.awaitingUpdate];
   var passed = [...snapshot.passed];
@@ -141,7 +174,14 @@ Predict? withGateChecks(
     for (final row in snapshot.serviceUpdates) row.identity: row,
   };
   final predictionAt = snapshot.savedAt ?? snapshot.generatedAt;
-  for (final check in checks) {
+  var coverage = snapshot.coverage;
+  final ordered = [...checks]
+    ..sort(
+      (a, b) => (a.savedAt?.millisecondsSinceEpoch ?? 0).compareTo(
+        b.savedAt?.millisecondsSinceEpoch ?? 0,
+      ),
+    );
+  for (final check in ordered) {
     final crossing = check.crossing;
     if (crossing == null ||
         !check.available ||
@@ -152,13 +192,31 @@ Predict? withGateChecks(
       continue;
     }
     for (final row in check.trains) {
-      updates.remove(row.identity);
+      if (row.observed != false) updates.remove(row.identity);
     }
     for (final row in check.serviceUpdates) {
       updates[row.identity] = row;
     }
+    if (check.incomplete && coverage?.incomplete != true) {
+      coverage = check.coverage?.incomplete == true
+          ? check.coverage
+          : const TrainCoverage(status: "partial");
+    }
+    final explicit = {
+      ...check.trains.map((row) => row.identity),
+      ...check.awaitingUpdate.map((row) => row.identity),
+      ...check.passed.map((row) => row.identity),
+      ...check.serviceUpdates.map((row) => row.identity),
+    };
+    bool replaces(String id) => !check.incomplete || explicit.contains(id);
     final gate = gates.where((row) => row.id == crossing.id).firstOrNull;
-    exact = exact.where((row) => row.id != crossing.id).toList();
+    exact = [
+      for (final row in exact)
+        if (row.id != crossing.id)
+          row
+        else if (!replaces(row.identity))
+          row.asEarlierEstimate(),
+    ];
     exact.addAll(
       check.trains.map(
         (row) => GatePrediction(
@@ -173,7 +231,8 @@ Predict? withGateChecks(
       ),
     );
     approaching = approaching.expand((row) {
-      if (!row.ids.contains(crossing.id)) return [row];
+      if (!row.ids.contains(crossing.id) || !replaces(row.identity))
+        return [row];
       final ids = row.ids.where((id) => id != crossing.id).toList();
       if (ids.isEmpty) return <Approach>[];
       final remaining = exact.where(
@@ -208,11 +267,13 @@ Predict? withGateChecks(
           ageMin: row.ageMin,
           basis: row.basis,
           bracket: row.bracket,
+          observed: row.observed,
         ),
       );
     }
     awaiting = awaiting.expand((row) {
-      if (!row.ids.contains(crossing.id)) return [row];
+      if (!row.ids.contains(crossing.id) || !replaces(row.identity))
+        return [row];
       final ids = row.ids.where((id) => id != crossing.id).toList();
       return ids.isEmpty
           ? <AwaitingTrain>[]
@@ -224,6 +285,7 @@ Predict? withGateChecks(
                 name: row.name,
                 current: row.current,
                 ageMin: row.ageMin,
+                reason: row.reason,
                 ids: ids,
               ),
             ];
@@ -237,12 +299,14 @@ Predict? withGateChecks(
           name: row.name,
           current: row.current,
           ageMin: row.ageMin,
+          reason: row.reason,
           ids: [crossing.id],
         ),
       ),
     );
     passed = passed.expand((row) {
-      if (!row.ids.contains(crossing.id)) return [row];
+      if (!row.ids.contains(crossing.id) || !replaces(row.identity))
+        return [row];
       final ids = row.ids.where((id) => id != crossing.id).toList();
       return ids.isEmpty
           ? <Passed>[]
@@ -279,6 +343,7 @@ Predict? withGateChecks(
   awaiting = awaiting
       .where((row) => !updates.containsKey(row.identity))
       .toList();
+  passed = passed.where((row) => !updates.containsKey(row.identity)).toList();
   final merged = <String, AwaitingTrain>{};
   for (final row in awaiting) {
     merged[row.identity] = AwaitingTrain(
@@ -288,6 +353,7 @@ Predict? withGateChecks(
       name: row.name,
       current: row.current,
       ageMin: row.ageMin,
+      reason: row.reason,
       ids: {...?merged[row.identity]?.ids, ...row.ids}.toList(),
     );
   }
@@ -296,9 +362,11 @@ Predict? withGateChecks(
     approaching: approaching,
     awaitingUpdate: merged.values.toList(),
     passed: passed,
-    coverage: snapshot.coverage,
+    coverage: coverage,
     serviceUpdates: updates.values.toList(),
     error: snapshot.error,
+    mapWarning: snapshot.mapWarning,
+    mapAgeSeconds: snapshot.mapAgeSeconds,
     crossings: snapshot.crossings,
     stations: snapshot.stations,
     checked: snapshot.checked,
@@ -332,4 +400,5 @@ Approach _remainingApproach(
   closesIn: next?.closesIn ?? row.closesIn,
   ageMin: row.ageMin,
   basis: row.basis,
+  observed: row.observed,
 );

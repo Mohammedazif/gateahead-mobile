@@ -6,7 +6,6 @@ import "package:geolocator/geolocator.dart";
 import "package:maplibre/maplibre.dart";
 
 import "../format.dart";
-import "../geo.dart";
 import "../models.dart";
 import "../rail_controller.dart";
 import "../theme.dart";
@@ -65,6 +64,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _refreshTimer;
+  Timer? _styleDeadline;
   bool _visible = true;
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -81,6 +81,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool? _framedWide;
   int _indiaFrameTries = 0;
   int _styleTicket = 0;
+  bool _mapUnavailable = false;
   String? _outlineJson;
   String? _railJson;
 
@@ -95,11 +96,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       const Duration(seconds: 15),
       (_) => rail.autoCheck(visible: _visible),
     );
+    _watchMapStyle();
   }
 
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _styleDeadline?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     rail.removeListener(_onRail);
     _dockScroll.dispose();
@@ -124,6 +127,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   void _onMapCreated(MapController controller) {
+    if (_mapUnavailable) return;
     _map = controller;
     _framedPlace = null;
     _framedRail = null;
@@ -146,7 +150,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (_framedWide == wide) return;
       _framedWide = wide;
       _indiaFrameTries = 0;
-      unawaited(_openOnIndia(_map!, wide));
+      final map = _map!;
+      unawaited(_mapTask(map, () => _openOnIndia(map, wide)));
     });
   }
 
@@ -169,6 +174,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   void _onStyleLoaded(StyleController style) {
+    if (_mapUnavailable) return;
+    _styleDeadline?.cancel();
     final ticket = ++_styleTicket;
     unawaited(_paintIndia(style, ticket));
   }
@@ -262,7 +269,39 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
     } catch (_) {
       if (!mounted || ticket != _styleTicket) return;
-      rethrow;
+      _showMapUnavailable();
+    }
+  }
+
+  void _onMapError(MapEventError event) {
+    if (event.kind == MapErrorKind.style || event.kind == MapErrorKind.render) {
+      _showMapUnavailable();
+    }
+  }
+
+  void _showMapUnavailable() {
+    if (!mounted || _mapUnavailable) return;
+    _styleTicket++;
+    _styleDeadline?.cancel();
+    _map = null;
+    setState(() => _mapUnavailable = true);
+  }
+
+  void _watchMapStyle() {
+    _styleDeadline?.cancel();
+    _styleDeadline = Timer(const Duration(seconds: 20), _showMapUnavailable);
+  }
+
+  void _retryMap() {
+    _watchMapStyle();
+    setState(() => _mapUnavailable = false);
+  }
+
+  Future<void> _mapTask<T>(MapController map, Future<T> Function() work) async {
+    try {
+      await work();
+    } catch (_) {
+      if (_map == map) _showMapUnavailable();
     }
   }
 
@@ -302,13 +341,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         north += 0.002;
       }
       unawaited(
-        map.animateCamera(
-          CameraUpdate.bounds(
-            GeoBox(west: west, south: south, east: east, north: north),
-            padding: const EdgeInsets.fromLTRB(48, 96, 48, 200),
-          ),
-          animation: const CameraAnimation.ease(
-            duration: Duration(milliseconds: 400),
+        _mapTask(
+          map,
+          () => map.animateCamera(
+            CameraUpdate.bounds(
+              GeoBox(west: west, south: south, east: east, north: north),
+              padding: const EdgeInsets.fromLTRB(48, 96, 48, 200),
+            ),
+            animation: const CameraAnimation.ease(
+              duration: Duration(milliseconds: 400),
+            ),
           ),
         ),
       );
@@ -316,10 +358,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
     if (placeChanged) {
       unawaited(
-        map.moveCamera(
-          CameraUpdate.position(
-            center: Geographic(lon: place.lon, lat: place.lat),
-            zoom: 14,
+        _mapTask(
+          map,
+          () => map.moveCamera(
+            CameraUpdate.position(
+              center: Geographic(lon: place.lon, lat: place.lat),
+              zoom: 14,
+            ),
           ),
         ),
       );
@@ -355,18 +400,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final colors = RailColors.of(context);
     final gates = rail.markedGates;
     final scene = rail.scene;
-    final lead =
-        !rail.sceneHistorical && scene != null && scene.trains.isNotEmpty
-        ? scene.trains.first
-        : null;
-    final railLine = scene?.rail ?? const <Spot>[];
-    final trainSpot =
-        lead != null &&
-            lead.positionOnSegment &&
-            sceneReportAge(lead, scene!, DateTime.now()) < 8 &&
-            railLine.length >= 2
-        ? pointAlongKm(railLine, lead.alongKm)
-        : null;
+    final trainSpots = rail.sceneHistorical
+        ? const <String, Spot>{}
+        : sceneTrainPositions(scene, DateTime.now());
     final size = MediaQuery.sizeOf(context);
     final wide = _isWide(size);
     if (_map != null && rail.place == null && _framedWide != wide) {
@@ -375,110 +411,145 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final map = Stack(
       fit: StackFit.expand,
       children: [
-        MapLibreMap(
-          key: _mapKey,
-          options: MapOptions(
-            style: MapStyle.url(colors.mapStyle),
-            minZoom: 3.2,
-            initCamera: CameraUpdate.bounds(
-              _indiaBounds,
-              padding: _indiaPadding(wide, size),
-            ),
-          ),
-          onMapCreated: _onMapCreated,
-          onStyleLoaded: _onStyleLoaded,
-          onClick: _onMapClick,
-          layers: [
-            if (scene != null && scene.rail.length >= 2)
-              PolylineLayer(
-                polylines: [
-                  Feature(
-                    geometry: LineString.from([
-                      for (final point in scene.rail)
-                        Geographic(lon: point.lon, lat: point.lat),
-                    ]),
+        if (_mapUnavailable)
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.all(22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    "Map unavailable. Use Nearby or search for a city.",
+                  ),
+                  TextButton.icon(
+                    onPressed: _retryMap,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text("Reload map"),
                   ),
                 ],
-                color: .literal(colors.rail),
-                width: const .literal(4),
               ),
-          ],
-          children: [
-            WidgetLayer(
-              allowInteraction: true,
-              markers: [
-                for (final gate in gates)
-                  Marker(
-                    point: Geographic(lon: gate.lon, lat: gate.lat),
-                    size: Size.square(gate.id == rail.selected?.id ? 28 : 22),
-                    child: GestureDetector(
-                      onTap: () => rail.openGate(gate),
+            ),
+          )
+        else
+          MapLibreMap(
+            key: _mapKey,
+            options: MapOptions(
+              style: MapStyle.url(colors.mapStyle),
+              minZoom: 3.2,
+              initCamera: CameraUpdate.bounds(
+                _indiaBounds,
+                padding: _indiaPadding(wide, size),
+              ),
+            ),
+            onMapCreated: _onMapCreated,
+            onStyleLoaded: _onStyleLoaded,
+            onError: _onMapError,
+            onClick: _onMapClick,
+            layers: [
+              if (scene != null && scene.rail.length >= 2)
+                PolylineLayer(
+                  polylines: [
+                    Feature(
+                      geometry: LineString.from([
+                        for (final point in scene.rail)
+                          Geographic(lon: point.lon, lat: point.lat),
+                      ]),
+                    ),
+                  ],
+                  color: .literal(colors.rail),
+                  width: const .literal(4),
+                ),
+            ],
+            children: [
+              WidgetLayer(
+                allowInteraction: true,
+                markers: [
+                  for (final gate in gates)
+                    Marker(
+                      point: Geographic(lon: gate.lon, lat: gate.lat),
+                      size: Size.square(gate.id == rail.selected?.id ? 28 : 22),
+                      child: GestureDetector(
+                        onTap: () => rail.openGate(gate),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: _gateColor(gate.status),
+                            border: Border.all(
+                              color: colors.markerInk,
+                              width: gate.id == rail.selected?.id ? 3 : 1.5,
+                            ),
+                          ),
+                          child: const SizedBox.expand(),
+                        ),
+                      ),
+                    ),
+                  if (rail.place != null)
+                    Marker(
+                      point: Geographic(
+                        lon: rail.place!.lon,
+                        lat: rail.place!.lat,
+                      ),
+                      size: const Size.square(18),
                       child: DecoratedBox(
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: _gateColor(gate.status),
-                          border: Border.all(
-                            color: colors.markerInk,
-                            width: gate.id == rail.selected?.id ? 3 : 1.5,
+                          color: colors.markerInk,
+                          border: const Border.fromBorderSide(
+                            BorderSide(color: RailColors.mapRed, width: 2),
                           ),
                         ),
                         child: const SizedBox.expand(),
                       ),
                     ),
-                  ),
-                if (rail.place != null)
-                  Marker(
-                    point: Geographic(
-                      lon: rail.place!.lon,
-                      lat: rail.place!.lat,
+                  if (rail.pending != null)
+                    Marker(
+                      point: Geographic(
+                        lon: rail.pending!.lon,
+                        lat: rail.pending!.lat,
+                      ),
+                      size: const Size.square(28),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: colors.amber, width: 3),
+                        ),
+                        child: const SizedBox.expand(),
+                      ),
                     ),
-                    size: const Size.square(18),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: colors.markerInk,
-                        border: const Border.fromBorderSide(
-                          BorderSide(color: RailColors.mapRed, width: 2),
+                  for (final train in trainSpots.entries)
+                    Marker(
+                      point: Geographic(
+                        lon: train.value.lon,
+                        lat: train.value.lat,
+                      ),
+                      size: const Size.square(28),
+                      child: Semantics(
+                        key: ValueKey(train.key),
+                        label: "Train ${train.key}",
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: colors.rail,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.train,
+                            color: RailColors.inkDark,
+                            size: 18,
+                          ),
                         ),
                       ),
-                      child: const SizedBox.expand(),
                     ),
-                  ),
-                if (rail.pending != null)
-                  Marker(
-                    point: Geographic(
-                      lon: rail.pending!.lon,
-                      lat: rail.pending!.lat,
-                    ),
-                    size: const Size.square(28),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: colors.amber, width: 3),
-                      ),
-                      child: const SizedBox.expand(),
-                    ),
-                  ),
-                if (trainSpot != null)
-                  Marker(
-                    point: Geographic(lon: trainSpot.lon, lat: trainSpot.lat),
-                    size: const Size.square(28),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: colors.rail,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.train,
-                        color: RailColors.inkDark,
-                        size: 18,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ],
-        ),
+                ],
+              ),
+              SourceAttribution(
+                alignment: Alignment.topRight,
+                padding: EdgeInsets.only(
+                  top: MediaQuery.paddingOf(context).top + 78,
+                  right: 12,
+                ),
+              ),
+            ],
+          ),
         Positioned(
           top: MediaQuery.paddingOf(context).top + 14,
           left: 14,

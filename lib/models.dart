@@ -28,6 +28,8 @@ class Gate {
     this.status,
     this.eta,
     this.closesIn,
+    this.hasUncertainTrain = false,
+    this.earlierEstimate = false,
   });
 
   final String id;
@@ -42,6 +44,8 @@ class Gate {
   final int groupSize;
   final String? status;
   final double? eta;
+  final bool hasUncertainTrain;
+  final bool earlierEstimate;
 
   /// Estimated minutes until the barrier comes down; zero or less predicts closure.
   final double? closesIn;
@@ -64,6 +68,8 @@ class Gate {
       status: status ?? this.status,
       eta: eta ?? this.eta,
       closesIn: closesIn ?? this.closesIn,
+      hasUncertainTrain: hasUncertainTrain,
+      earlierEstimate: earlierEstimate,
     );
   }
 
@@ -73,9 +79,17 @@ class Gate {
     if (json["restricted_freight"] == true) return null;
     final lat = _maybeNum(json["lat"]);
     final lon = _maybeNum(json["lon"]);
-    if (lat == null || lon == null) return null;
+    final id = json["id"];
+    if (id is! String ||
+        id.isEmpty ||
+        lat == null ||
+        lat.abs() > 90 ||
+        lon == null ||
+        lon.abs() > 180) {
+      return null;
+    }
     return Gate(
-      id: _str(json["id"]),
+      id: id,
       name: _str(json["name"]),
       lat: lat,
       lon: lon,
@@ -158,10 +172,12 @@ class Approach {
     this.closesIn,
     this.ageMin,
     this.basis = "",
+    this.observed,
   });
 
   final double? ageMin;
   final String basis;
+  final bool? observed;
   final String train;
   final String name;
   final String cluster;
@@ -208,6 +224,7 @@ class Approach {
       closesIn: _maybeNum(json["closes_in"]),
       ageMin: _maybeNum(json["age_min"]),
       basis: _str(json["basis"]),
+      observed: json["observed"] is bool ? json["observed"] : null,
     );
   }
 }
@@ -305,16 +322,29 @@ class GatePrediction {
     required this.status,
     this.closesIn,
     this.train = "",
+    this.earlierEstimate = false,
   });
   final String id, status, train;
   final double eta;
   final double? closesIn;
+  final bool earlierEstimate;
   final String runId, startDate;
   String get identity => runId.isNotEmpty
       ? runId
       : startDate.isNotEmpty
       ? "$train:$startDate"
       : train;
+
+  GatePrediction asEarlierEstimate() => GatePrediction(
+    id: id,
+    eta: eta,
+    status: status,
+    closesIn: closesIn,
+    train: train,
+    runId: runId,
+    startDate: startDate,
+    earlierEstimate: true,
+  );
 
   static GatePrediction? tryParse(Object? raw) {
     if (raw is! Map) return null;
@@ -340,9 +370,10 @@ class AwaitingTrain {
     required this.name,
     required this.current,
     required this.ageMin,
+    this.reason = "stopped_report",
     this.ids = const [],
   });
-  final String number, name, current;
+  final String number, name, current, reason;
   final double ageMin;
   final List<String> ids;
 
@@ -354,7 +385,9 @@ class AwaitingTrain {
       : number;
 
   static AwaitingTrain? tryParse(Object? raw) {
-    if (raw is! Map || raw["number"] is! String) return null;
+    if (raw is! Map || raw["number"] is! String || raw["number"] == "") {
+      return null;
+    }
     return AwaitingTrain(
       runId: _str(raw["run_id"]),
       startDate: _str(raw["start_date"]),
@@ -362,6 +395,7 @@ class AwaitingTrain {
       name: _str(raw["name"]),
       current: _str(raw["current"]),
       ageMin: _maybeNum(raw["age_min"]) ?? 0,
+      reason: raw["reason"] is String ? raw["reason"] : "stopped_report",
       ids: [for (final id in (raw["ids"] as List?) ?? const []) id.toString()],
     );
   }
@@ -369,6 +403,7 @@ class AwaitingTrain {
 
 class TrainCoverage {
   const TrainCoverage({
+    this.status = "",
     this.liveChecked = 0,
     this.liveCandidates = 0,
     this.pendingLive = 0,
@@ -377,12 +412,20 @@ class TrainCoverage {
     this.missingOrStaleRoutes = 0,
   });
 
+  final String status;
   final int liveChecked,
       liveCandidates,
       pendingLive,
       unavailableLive,
       unavailableDiscovery,
       missingOrStaleRoutes;
+
+  bool get incomplete =>
+      status == "partial" ||
+      pendingLive > 0 ||
+      unavailableLive > 0 ||
+      unavailableDiscovery > 0 ||
+      missingOrStaleRoutes > 0;
 
   String? get notice {
     if (unavailableDiscovery > 0) {
@@ -397,12 +440,13 @@ class TrainCoverage {
     if (unavailableLive > 0) {
       return "Some services have no current running report. Coverage is incomplete.";
     }
-    return null;
+    return incomplete ? "Coverage is incomplete. Refresh to try again." : null;
   }
 
   static TrainCoverage? tryParse(Object? raw) {
     if (raw is! Map) return null;
     return TrainCoverage(
+      status: raw["status"] is String ? raw["status"] : "",
       liveChecked: _maybeNum(raw["live_checked"])?.round() ?? 0,
       liveCandidates: _maybeNum(raw["live_candidates"])?.round() ?? 0,
       pendingLive: _maybeNum(raw["pending_live"])?.round() ?? 0,
@@ -422,6 +466,8 @@ class Predict {
     this.coverage,
     this.gatePredictions,
     this.error = "",
+    this.mapWarning = "",
+    this.mapAgeSeconds,
     this.crossings = 0,
     this.stations = const [],
     this.checked = 0,
@@ -443,6 +489,9 @@ class Predict {
   final DateTime? generatedAt;
 
   final String error;
+  final String mapWarning;
+  final double? mapAgeSeconds;
+  bool get incomplete => mapWarning.isNotEmpty || coverage?.incomplete == true;
   final int crossings;
   final List<String> stations;
   final int checked;
@@ -474,6 +523,8 @@ class Predict {
           : null,
       generatedAt: DateTime.tryParse(_str(json["generated_at"])),
       error: _str(json["error"]),
+      mapWarning: _str(json["map_warning"]),
+      mapAgeSeconds: _maybeNum(json["map_age_seconds"]),
       crossings: _maybeNum(json["crossings"])?.round() ?? 0,
       stations: [
         for (final code in (json["stations"] as List?) ?? const [])
@@ -514,10 +565,12 @@ class SceneTrain {
     this.current = "",
     this.basis = "",
     this.snapshotAt,
+    this.observed,
   });
 
   final String movement, current, basis;
   final DateTime? snapshotAt;
+  final bool? observed;
   final bool positionOnSegment;
   final String number;
   final String name;
@@ -540,22 +593,45 @@ class SceneTrain {
   static SceneTrain? tryParse(Object? raw) {
     if (raw is! Map) return null;
     final json = _map(raw);
+    final number = json["number"], status = json["status"];
+    final eta = _maybeNum(json["eta_min"]);
+    final along = _maybeNum(json["along_km"]);
+    final age = _maybeNum(json["age_min"]);
+    if (number is! String ||
+        number.isEmpty ||
+        status is! String ||
+        !const [
+          "closed",
+          "closing_soon",
+          "approaching",
+          "later",
+        ].contains(status) ||
+        eta == null ||
+        along == null ||
+        along < 0 ||
+        age == null ||
+        age < 0 ||
+        (json["snapshot_at"] != null &&
+            _timestamp(json["snapshot_at"]) == null)) {
+      return null;
+    }
     return SceneTrain(
       runId: _str(raw["run_id"]),
       startDate: _str(raw["start_date"]),
       positionOnSegment: json["position_on_segment"] == true,
-      number: _str(json["number"]),
+      number: number,
       name: _str(json["name"]),
-      etaMin: _maybeNum(json["eta_min"]) ?? 0,
-      status: _str(json["status"]),
-      alongKm: _maybeNum(json["along_km"]) ?? 0,
-      ageMin: _maybeNum(json["age_min"]) ?? 0,
+      etaMin: eta,
+      status: status,
+      alongKm: along,
+      ageMin: age,
       bracket: _str(json["bracket"]),
       closesInMin: _maybeNum(json["closes_in_min"]),
       movement: _str(json["movement"]),
       current: _str(json["current"]),
       basis: _str(json["basis"]),
       snapshotAt: _timestamp(json["snapshot_at"]),
+      observed: json["observed"] is bool ? json["observed"] : null,
     );
   }
 }
@@ -578,13 +654,16 @@ class SceneCrossing {
     final json = _map(raw);
     final lat = _maybeNum(json["lat"]);
     final lon = _maybeNum(json["lon"]);
-    if (lat == null || lon == null) return null;
-    return SceneCrossing(
-      id: _str(json["id"]),
-      name: _str(json["name"]),
-      lat: lat,
-      lon: lon,
-    );
+    final id = json["id"];
+    if (id is! String ||
+        id.isEmpty ||
+        lat == null ||
+        lat.abs() > 90 ||
+        lon == null ||
+        lon.abs() > 180) {
+      return null;
+    }
+    return SceneCrossing(id: id, name: _str(json["name"]), lat: lat, lon: lon);
   }
 }
 
@@ -595,28 +674,52 @@ class Scene {
     this.coverage,
     required this.available,
     this.error = "",
+    this.mapWarning = "",
+    this.mapAgeSeconds,
     this.crossing,
     this.rail = const [],
     this.trains = const [],
     this.passed = const [],
     this.offline = false,
     this.savedAt,
+    this.legacyAliasResolved = false,
   });
 
   final List<ServiceUpdate> serviceUpdates;
   final bool offline;
+  final bool legacyAliasResolved;
   final List<AwaitingTrain> awaitingUpdate;
   final TrainCoverage? coverage;
   final DateTime? savedAt;
 
   final bool available;
   final String error;
+  final String mapWarning;
+  final double? mapAgeSeconds;
+  bool get incomplete => mapWarning.isNotEmpty || coverage?.incomplete == true;
   final SceneCrossing? crossing;
   final List<Spot> rail;
   final List<SceneTrain> trains;
 
   /// Trains that went over this crossing in the last few minutes.
   final List<ScenePassed> passed;
+
+  Scene asSaved() => Scene(
+    serviceUpdates: serviceUpdates,
+    awaitingUpdate: awaitingUpdate,
+    coverage: coverage,
+    available: available,
+    error: error,
+    mapWarning: mapWarning,
+    mapAgeSeconds: mapAgeSeconds,
+    crossing: crossing,
+    rail: rail,
+    trains: trains,
+    passed: passed,
+    offline: true,
+    savedAt: savedAt,
+    legacyAliasResolved: legacyAliasResolved,
+  );
 
   static Scene parse(Map<String, dynamic> json) {
     final rail = <Spot>[];
@@ -638,11 +741,14 @@ class Scene {
       ],
       coverage: TrainCoverage.tryParse(json["coverage"]),
       offline: json["_offline"] == true,
+      legacyAliasResolved: json["legacy_alias_resolved"] == true,
       savedAt: json["_saved_at"] is int
           ? DateTime.fromMillisecondsSinceEpoch(json["_saved_at"])
           : null,
       available: json["available"] == true,
       error: _str(json["error"]),
+      mapWarning: _str(json["map_warning"]),
+      mapAgeSeconds: _maybeNum(json["map_age_seconds"]),
       crossing: SceneCrossing.tryParse(json["crossing"]),
       rail: rail,
       trains: [
@@ -681,7 +787,12 @@ class ScenePassed {
     if (raw is! Map) return null;
     final json = _map(raw);
     final ago = _maybeNum(json["ago_min"]);
-    if (ago == null) return null;
+    if (ago == null ||
+        ago < 0 ||
+        json["number"] is! String ||
+        json["number"] == "") {
+      return null;
+    }
     return ScenePassed(
       runId: _str(raw["run_id"]),
       startDate: _str(raw["start_date"]),
@@ -696,6 +807,8 @@ class GatesBody {
   const GatesBody({
     required this.gates,
     this.error = "",
+    this.mapWarning = "",
+    this.mapAgeSeconds,
     this.offline = false,
     this.savedAt,
   });
@@ -705,6 +818,9 @@ class GatesBody {
 
   final List<Gate> gates;
   final String error;
+  final String mapWarning;
+  final double? mapAgeSeconds;
+  bool get authoritative => !offline && error.isEmpty && mapWarning.isEmpty;
 
   static GatesBody parse(Map<String, dynamic> json) {
     return GatesBody(
@@ -713,6 +829,8 @@ class GatesBody {
           ? DateTime.fromMillisecondsSinceEpoch(json["_saved_at"])
           : null,
       error: _str(json["error"]),
+      mapWarning: _str(json["map_warning"]),
+      mapAgeSeconds: _maybeNum(json["map_age_seconds"]),
       gates: [
         for (final row in (json["gates"] as List?) ?? const [])
           ?Gate.tryParse(row),
@@ -738,7 +856,7 @@ double? _maybeNum(Object? value) {
 
 DateTime? _timestamp(Object? value) {
   final seconds = _maybeNum(value);
-  if (seconds == null || !seconds.isFinite) return null;
+  if (seconds == null || seconds.abs() > 8640000000000) return null;
   return DateTime.fromMillisecondsSinceEpoch((seconds * 1000).round());
 }
 

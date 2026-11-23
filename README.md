@@ -16,7 +16,7 @@ Run this from the `mobile` repository on a computer with OpenSSL and an authenti
 bash tools/setup-android-signing.sh
 ```
 
-This creates a password-protected signing key in the ignored `.signing/` folder and uploads two repository secrets: `GATEAHEAD_ANDROID_KEYSTORE_BASE64` and `GATEAHEAD_ANDROID_KEYSTORE_PASSWORD`. It reuses the existing key when run again. Back up `.signing/`; future updates must use the same key. For offline key creation, pass `--local-only`, then run the command without that flag when GitHub is reachable.
+This creates a password-protected signing key in the ignored `.signing/` folder and uploads `GATEAHEAD_ANDROID_KEYSTORE_BASE64` and `GATEAHEAD_ANDROID_KEYSTORE_PASSWORD` as repository secrets. It also records the public certificate fingerprint in the `GATEAHEAD_ANDROID_CERT_SHA256` repository variable. The release workflow checks the APK against that fingerprint before publishing. If the app has already been released, restore the original signing key from your backup before running the script to set the pin. Back up `.signing/` for future updates. For offline key creation, pass `--local-only`, then run the command without that flag when GitHub is reachable.
 
 ### Android test
 
@@ -57,7 +57,7 @@ On Linux sandboxes with a read-only Flutter SDK or blocked local sockets, run `p
 
 The desktop build needs `clang`, `ninja-build`, `pkg-config`, and `libgtk-3-dev`.
 
-`API_BASE` defaults to `http://127.0.0.1:8000`.
+Debug builds default to `http://127.0.0.1:8000`. Release builds require an HTTPS API address and default to `https://gateahead-api.onrender.com`.
 
 ## Navigation
 
@@ -72,6 +72,8 @@ Select a gate to save or rename it, copy its crossing link, and submit an unveri
 Copied links use `https://gateahead.vercel.app/` by default. Override this with `--dart-define=WEB_BASE=https://your-site.example/` when building against another website.
 
 Optional automatic checks run every two minutes while the app is visible, with weekday and commute-hour controls in local device time. Manual train checks have a 90-second cooldown. Server rate limits pause further checks, and repeated scene opens reuse a result for 90 seconds.
+
+Use **Settings → Clear location history** to remove the last place and cached checks on this device while keeping explicitly saved gates.
 
 Cached predictions retain their original check time and are labeled as saved results. Stale train markers are suppressed; map tiles still need a connection. Community reports expire after ten minutes and remain separate from train predictions. Deploy a backend with `GET /reports` and `POST /reports` before using reports. Background push notifications require a separate messaging setup.
 

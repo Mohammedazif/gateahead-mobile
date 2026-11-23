@@ -61,12 +61,21 @@ void main() {
         "name": "Parasuram",
         "eta_min": 3,
         "age_min": 7,
+        "along_km": .5,
+        "status": "closed",
         "movement": "stopped",
         "snapshot_at": at.millisecondsSinceEpoch / 1000,
         "current": "PAZHAYANGADI",
         "position_on_segment": true,
       },
-      {"number": "16603", "eta_min": 15, "age_min": 1, "movement": "moving"},
+      {
+        "number": "16603",
+        "eta_min": 15,
+        "age_min": 1,
+        "movement": "moving",
+        "along_km": 0,
+        "status": "later",
+      },
     ],
     "passed": [
       {"number": "16650", "ago_min": 3},
@@ -116,8 +125,16 @@ void main() {
   test("repeated reads use the original snapshot clock", () {
     for (final minutes in [1, 2, 7]) {
       final current = currentScene(scene, at.add(Duration(minutes: minutes)))!;
-      expect(current.awaitingUpdate.single.ageMin, 7 + minutes);
-      expect(current.trains.single.number, "16603");
+      final stopped = current.awaitingUpdate.firstWhere(
+        (row) => row.number == "16650",
+      );
+      expect(stopped.ageMin, 7 + minutes);
+      if (minutes < 7) {
+        expect(current.trains.single.number, "16603");
+      } else {
+        expect(current.trains, isEmpty);
+        expect(current.awaitingUpdate.last.reason, "stale_report");
+      }
     }
     expect(
       sceneReportAge(
@@ -152,7 +169,14 @@ void main() {
     final moved = Scene.parse({
       "available": true,
       "trains": [
-        {"number": "16650", "eta_min": 3, "age_min": 1, "movement": "moving"},
+        {
+          "number": "16650",
+          "eta_min": 3,
+          "age_min": 1,
+          "movement": "moving",
+          "along_km": 0,
+          "status": "closed",
+        },
       ],
     });
     expect(currentScene(moved, at)!.trains.single.number, "16650");

@@ -25,6 +25,8 @@ class RailController extends ChangeNotifier {
   DateTime? lastAttempt;
   DateTime? pausedUntil;
   bool gatesCached = false;
+  bool gatesAuthoritative = false;
+  String? selectionNote;
   bool get historical =>
       predict?.offline == true ||
       (checkedAt != null &&
@@ -69,8 +71,11 @@ class RailController extends ChangeNotifier {
     gates,
   );
   set predict(Predict? value) => _predict = value;
-  List<Gate> get markedGates =>
-      markGates(gates, historical ? null : predict, gateChecks);
+  List<Gate> get markedGates {
+    final current = historical ? null : predict;
+    return markGates(gates, current, current == null ? gateChecks : const []);
+  }
+
   DateTime? checkedAt;
   bool checking = false;
   bool locating = false;
@@ -154,6 +159,8 @@ class RailController extends ChangeNotifier {
     final oldGates = storage?.response(responseKey("/gates", lat, lon));
     gates = oldGates == null ? const [] : GatesBody.parse(oldGates.data).gates;
     gatesCached = oldGates != null;
+    gatesAuthoritative = false;
+    selectionNote = null;
     lastAttempt = null;
     unawaited(
       storage
@@ -176,19 +183,54 @@ class RailController extends ChangeNotifier {
     gatesNote = null;
     notifyListeners();
     if (!hasLabel) unawaited(_resolvePlaceLabel(lat, lon, ticket));
+    await _readGates(place!, ticket);
+  }
+
+  Future<void> retryGates() async {
+    final here = place;
+    if (here == null || loadingGates) return;
+    loadingGates = true;
+    notifyListeners();
+    await _readGates(here, _generation);
+  }
+
+  Future<void> _readGates(Spot here, int ticket) async {
     try {
-      final body = await api.gates(lat, lon);
+      final body = await api.gates(here.lat, here.lon);
       if (ticket != _generation) return;
       if (body.error.isEmpty) gates = body.gates;
       gatesCached = body.offline;
-      gatesNote = body.error.isEmpty ? null : friendlyError(body.error);
+      gatesAuthoritative = body.authoritative;
+      gatesNote = body.error.isNotEmpty
+          ? friendlyError(body.error)
+          : body.mapWarning.isNotEmpty
+          ? mapWarningLabel(body.mapAgeSeconds)
+          : null;
+      if (gatesAuthoritative) {
+        final visible = gates.map((gate) => gate.id).toSet();
+        final next = favorites
+            .where(
+              (item) =>
+                  item.place != here ||
+                  visible.contains(item.gate.id) ||
+                  isLegacyCrossingId(item.gate.id),
+            )
+            .toList();
+        if (next.length != favorites.length) {
+          favorites = next;
+          _saveFavorites();
+        }
+        if (selected != null && !visible.contains(selected!.id)) {
+          _unavailableCrossing(selected!.id);
+        }
+      }
     } on RailException catch (err) {
       if (ticket != _generation) return;
-      if (oldGates == null) gates = const [];
+      gatesAuthoritative = false;
       gatesNote = err.message;
     } catch (_) {
       if (ticket != _generation) return;
-      if (oldGates == null) gates = const [];
+      gatesAuthoritative = false;
       gatesNote = "Could not load crossings.";
     } finally {
       if (ticket == _generation) {
@@ -297,26 +339,53 @@ class RailController extends ChangeNotifier {
     final here = place;
     if (here == null) return;
     final ticket = ++_sceneTicket;
+    final previous = selected?.id == gate.id
+        ? _scene ?? _gateChecks[gate.id]
+        : _gateChecks[gate.id];
     selected = gate;
     sceneLoading = !refreshing;
     if (!refreshing) scene = null;
     sceneMessage = null;
+    selectionNote = null;
     notifyListeners();
     try {
       final body = await api.scene(here.lat, here.lon, gate.id);
       if (ticket != _sceneTicket) return;
+      if (body.error == "crossing_not_found" && !body.offline) {
+        _unavailableCrossing(gate.id);
+        return;
+      }
+      if (body.available || body.legacyAliasResolved) {
+        final crossing = body.crossing;
+        if (crossing == null ||
+            !sceneIdentityMatches(
+              gate.id,
+              crossing.id,
+              aliasResolved: body.legacyAliasResolved,
+            )) {
+          throw RailException(
+            "The service returned a different crossing. Try again.",
+          );
+        }
+        if (gate.id != crossing.id) _updateLegacySelection(gate, crossing);
+      }
       scene = body;
       if (body.available &&
           !body.offline &&
           body.error.isEmpty &&
-          body.crossing?.id == gate.id) {
-        _gateChecks[gate.id] = body;
+          body.crossing != null) {
+        _gateChecks[body.crossing!.id] = body;
       }
       if (!body.available || body.rail.length < 2) {
-        sceneMessage = body.error.isNotEmpty ? friendlyError(body.error) : "This crossing has no rail line on the map, so the train stays off it.";
+        sceneMessage = body.error.isNotEmpty
+            ? friendlyError(body.error)
+            : body.mapWarning.isNotEmpty
+            ? mapWarningLabel(body.mapAgeSeconds)
+            : "Crossing rail data is unavailable. You can still check reported trains.";
       }
     } on RailException catch (err) {
       if (ticket != _sceneTicket) return;
+      scene = previous?.asSaved();
       sceneMessage = err.message;
       if (err.retryAt != null) {
         pausedUntil = err.retryAt;
@@ -329,6 +398,7 @@ class RailController extends ChangeNotifier {
       }
     } catch (_) {
       if (ticket != _sceneTicket) return;
+      scene = previous?.asSaved();
       sceneMessage = "Could not open this crossing.";
     } finally {
       if (ticket == _sceneTicket) {
@@ -336,6 +406,66 @@ class RailController extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  void _updateLegacySelection(Gate legacy, SceneCrossing crossing) {
+    final canonical =
+        gates.where((gate) => gate.id == crossing.id).firstOrNull ??
+        Gate(
+          id: crossing.id,
+          name: crossing.name,
+          lat: crossing.lat,
+          lon: crossing.lon,
+          km: legacy.km,
+          source: legacy.source,
+        );
+    selected = canonical;
+    if (favorites.any((row) => row.gate.id == legacy.id)) {
+      favorites = [
+        for (final row in favorites)
+          if (row.gate.id == legacy.id)
+            SavedGate(canonical, row.label, row.place)
+          else
+            row,
+      ];
+      _saveFavorites();
+    }
+  }
+
+  void _unavailableCrossing(String id) {
+    _gateChecks.remove(id);
+    gates = gates.where((gate) => gate.id != id).toList();
+    if (favorites.any((row) => row.gate.id == id)) removeSaved(id);
+    selectionNote = "That crossing is no longer on the map.";
+    error = selectionNote;
+    closeScene();
+  }
+
+  Future<bool> clearLocationHistory() async {
+    _generation++;
+    _locationTicket++;
+    _sceneTicket++;
+    _nameTimer?.cancel();
+    place = null;
+    placeLabel = null;
+    pending = null;
+    spotName = null;
+    naming = false;
+    locating = false;
+    checking = false;
+    checkedAt = null;
+    lastAttempt = null;
+    _predict = null;
+    _gateChecks.clear();
+    gates = const [];
+    gatesAuthoritative = false;
+    gatesCached = false;
+    loadingGates = false;
+    gatesNote = null;
+    error = null;
+    selectionNote = null;
+    closeScene();
+    return await storage?.clearLocationHistory() ?? true;
   }
 
   Future<void> restore() async {
@@ -421,7 +551,14 @@ class RailController extends ChangeNotifier {
     await choosePlace(saved.place.lat, saved.place.lon, label: saved.label);
     if (ticket != _generation || sceneTicket != _sceneTicket) return;
     final match = gates.where((gate) => gate.id == saved.gate.id).firstOrNull;
-    await openGate(match ?? saved.gate);
+    if (match != null || isLegacyCrossingId(saved.gate.id)) {
+      await openGate(match ?? saved.gate);
+    } else if (gatesAuthoritative) {
+      _unavailableCrossing(saved.gate.id);
+    } else {
+      selectionNote = "This saved crossing could not be verified. Try again when connected.";
+      notifyListeners();
+    }
   }
 
   Future<bool> openLink(String text) async {
@@ -431,8 +568,29 @@ class RailController extends ChangeNotifier {
     final sceneTicket = _sceneTicket + 1;
     await choosePlace(link.place.lat, link.place.lon);
     if (ticket != _generation || sceneTicket != _sceneTicket) return true;
-    final gate = gates.where((gate) => gate.id == link.gateId).firstOrNull;
-    if (gate != null) await openGate(gate);
+    final id = link.gateId;
+    if (id == null || id.isEmpty) return true;
+    final gate = gates.where((gate) => gate.id == id).firstOrNull;
+    if (gate != null) {
+      await openGate(gate);
+    } else if (isLegacyCrossingId(id)) {
+      await openGate(
+        Gate(
+          id: id,
+          name: "Saved crossing",
+          lat: link.place.lat,
+          lon: link.place.lon,
+          km: 0,
+          source: "user",
+        ),
+      );
+    } else {
+      selectionNote = gatesAuthoritative
+          ? "That crossing could not be found at this location."
+          : "That crossing could not be verified. Try again when connected.";
+      error = selectionNote;
+      notifyListeners();
+    }
     return true;
   }
 

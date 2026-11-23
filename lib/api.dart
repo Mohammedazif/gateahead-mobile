@@ -1,5 +1,6 @@
 import "dart:convert";
 
+import "package:flutter/foundation.dart";
 import "package:http/http.dart" as http;
 
 import "models.dart";
@@ -7,7 +8,9 @@ import "device_store.dart";
 
 const defaultApiBase = String.fromEnvironment(
   "API_BASE",
-  defaultValue: "http://127.0.0.1:8000",
+  defaultValue: kReleaseMode
+      ? "https://gateahead-api.onrender.com"
+      : "http://127.0.0.1:8000",
 );
 
 class RailException implements Exception {
@@ -62,27 +65,51 @@ class HttpRailApi implements RailApi, CommunityApi {
   final Map<String, _CacheWrites> _cacheWrites = {};
   int _requestVersion = 0;
 
+  Uri _uri(String path, [Map<String, String>? query]) {
+    final uri = Uri.tryParse(base);
+    if (uri == null ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        (uri.scheme != "https" && (kReleaseMode || uri.scheme != "http"))) {
+      throw RailException(
+        kReleaseMode
+            ? "This app requires an HTTPS service address."
+            : "The service address is invalid.",
+      );
+    }
+    final prefix = uri.path.endsWith("/")
+        ? uri.path.substring(0, uri.path.length - 1)
+        : uri.path;
+    return uri.replace(path: "$prefix$path", queryParameters: query);
+  }
+
   @override
   Future<List<CityHit>> cities(String query) async {
     final json = await _get("/cities", {
       "q": query,
     }, const Duration(seconds: 15));
     final rows = json["cities"];
-    if (rows is! List) return const [];
+    if (rows is! List) {
+      throw RailException("City search returned invalid data. Try again.");
+    }
     final cities = <CityHit>[];
     for (final row in rows) {
       if (row is! Map) continue;
-      final name = row["name"]?.toString().trim() ?? "";
-      final state = row["state"]?.toString().trim() ?? "";
+      final name = row["name"] is String ? (row["name"] as String).trim() : "";
+      final state = row["state"] is String
+          ? (row["state"] as String).trim()
+          : "";
       final lat = row["lat"];
       final lon = row["lon"];
-      if (name.isEmpty || lat is! num || lon is! num) continue;
+      if (name.isEmpty || !validCoordinates(lat, lon)) continue;
       cities.add(
         CityHit(
           name: name,
           state: state,
-          lat: lat.toDouble(),
-          lon: lon.toDouble(),
+          lat: (lat as num).toDouble(),
+          lon: (lon as num).toDouble(),
         ),
       );
     }
@@ -106,7 +133,7 @@ class HttpRailApi implements RailApi, CommunityApi {
     final json = await _get("/gates", {
       "lat": "$lat",
       "lon": "$lon",
-    }, const Duration(seconds: 40));
+    }, const Duration(seconds: 90));
     return GatesBody.parse(json);
   }
 
@@ -134,32 +161,37 @@ class HttpRailApi implements RailApi, CommunityApi {
     final body = await _get("/reports", {
       "crossing_id": id,
     }, const Duration(seconds: 15));
-    return (body["reports"] as List? ?? [])
-        .whereType<Map>()
-        .map((row) => Map<String, dynamic>.from(row))
-        .toList();
+    return _reports(body);
   }
 
   @override
   Future<List<Map<String, dynamic>>> report(Gate gate, String state) async {
+    if (isLegacyCrossingId(gate.id)) {
+      throw RailException("Reopen this crossing to update its saved link.");
+    }
     final id = await storage?.installationId();
     if (id == null) {
       throw RailException("Reports are unavailable on this device.");
     }
-    final root = base.endsWith("/") ? base.substring(0, base.length - 1) : base;
-    final response = await _client
-        .post(
-          Uri.parse("$root/reports"),
-          headers: {"Content-Type": "application/json"},
-          body: jsonEncode({
-            "crossing_id": gate.id,
-            "installation_id": id,
-            "state": state,
-            "lat": gate.lat,
-            "lon": gate.lon,
-          }),
-        )
-        .timeout(const Duration(seconds: 40));
+    final uri = _uri("/reports");
+    late http.Response response;
+    try {
+      response = await _client
+          .post(
+            uri,
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({
+              "crossing_id": gate.id,
+              "installation_id": id,
+              "state": state,
+              "lat": gate.lat,
+              "lon": gate.lon,
+            }),
+          )
+          .timeout(const Duration(seconds: 90));
+    } catch (_) {
+      throw RailException("Could not send your report. Try again.");
+    }
     if (response.statusCode != 200) {
       throw RailException(
         response.statusCode == 429
@@ -167,12 +199,50 @@ class HttpRailApi implements RailApi, CommunityApi {
             : "Could not send your report. Try again later.",
       );
     }
-    final body = jsonDecode(response.body) as Map;
-    return (body["reports"] as List? ?? [])
-        .whereType<Map>()
-        .map((row) => Map<String, dynamic>.from(row))
-        .toList();
+    late Map<String, dynamic> body;
+    try {
+      body = _decode(response.body);
+    } on FormatException {
+      throw RailException("The service returned an invalid report. Try again.");
+    }
+    final reports = _reports(body);
+    if (!reports.any((row) => row["state"] == state)) {
+      throw RailException(
+        "The service did not confirm your report. Try again.",
+      );
+    }
+    return reports;
   }
+
+  static Map<String, dynamic> _decode(String body) {
+    final decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) throw const FormatException();
+    return decoded;
+  }
+
+  static List<Map<String, dynamic>> _reports(Map<String, dynamic> body) {
+    final rows = body["reports"];
+    if (body["error"] != null || body["verified"] != false || rows is! List) {
+      throw RailException("The service returned an invalid report. Try again.");
+    }
+    final reports = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      if (row is! Map<String, dynamic> ||
+          !const ["open", "closed", "wrong_location"].contains(row["state"]) ||
+          !_validReportTime(row["at"]) ||
+          !_validReportTime(row["expires_at"]) ||
+          (row["expires_at"] as num) <= (row["at"] as num)) {
+        throw RailException(
+          "The service returned an invalid report. Try again.",
+        );
+      }
+      reports.add(row);
+    }
+    return reports;
+  }
+
+  static bool _validReportTime(Object? value) =>
+      value is num && value.isFinite && value >= 0 && value <= 8640000000000;
 
   Future<Map<String, dynamic>> _get(
     String path,
@@ -184,9 +254,17 @@ class HttpRailApi implements RailApi, CommunityApi {
         ? _cacheWrites.putIfAbsent(key, _CacheWrites.new)
         : null;
     final version = ++_requestVersion;
+    final historyGeneration = storage?.historyGeneration;
     if (pending != null) pending.count++;
     try {
-      return await _getResponse(path, query, timeout, pending, version);
+      return await _getResponse(
+        path,
+        query,
+        timeout,
+        pending,
+        version,
+        historyGeneration,
+      );
     } finally {
       if (pending != null && --pending.count == 0) _cacheWrites.remove(key);
     }
@@ -198,9 +276,9 @@ class HttpRailApi implements RailApi, CommunityApi {
     Duration timeout,
     _CacheWrites? pending,
     int version,
+    int? historyGeneration,
   ) async {
-    final root = base.endsWith("/") ? base.substring(0, base.length - 1) : base;
-    final uri = Uri.parse("$root$path").replace(queryParameters: query);
+    final uri = _uri(path, query);
     final cacheable = ["/gates", "/predict", "/scene"].contains(path);
     final key = Uri(path: path, queryParameters: query).toString();
     final saved = cacheable ? storage?.response(key) : null;
@@ -213,7 +291,11 @@ class HttpRailApi implements RailApi, CommunityApi {
         : null;
     if (path == "/scene" &&
         saved != null &&
+        saved.data["available"] == true &&
+        saved.data["map_warning"] == null &&
+        TrainCoverage.tryParse(saved.data["coverage"])?.incomplete != true &&
         (latestPrediction == null || !saved.at.isBefore(latestPrediction.at)) &&
+        !saved.at.isAfter(DateTime.now()) &&
         DateTime.now().difference(saved.at).inSeconds < 90) {
       return {...saved.data, "_saved_at": saved.at.millisecondsSinceEpoch};
     }
@@ -238,7 +320,13 @@ class HttpRailApi implements RailApi, CommunityApi {
     }
     if (response.statusCode == 429) {
       final seconds =
-          int.tryParse(response.headers["retry-after"] ?? "") ?? 600;
+          (int.tryParse(response.headers["retry-after"] ?? "") ?? 600).clamp(
+            1,
+            86400,
+          );
+      if (path != "/predict" && path != "/scene") {
+        throw RailException("Too many requests. Try again in a few minutes.");
+      }
       await storage?.write(
         "paused-until",
         DateTime.now().add(Duration(seconds: seconds)).millisecondsSinceEpoch,
@@ -254,23 +342,19 @@ class HttpRailApi implements RailApi, CommunityApi {
         "Could not reach the service at $base. Try again in a moment.",
       );
     }
-    dynamic decoded;
+    late Map<String, dynamic> data;
     try {
-      decoded = jsonDecode(response.body);
+      data = _decode(response.body)
+        ..remove("_offline")
+        ..remove("_saved_at");
     } on FormatException {
       if (saved != null) return saved.restored();
       throw RailException(
         "The service returned invalid data. Try again in a moment.",
       );
     }
-    if (decoded is! Map) {
-      if (saved != null) return saved.restored();
-      throw RailException(
-        "Could not reach the service at $base. Try again in a moment.",
-      );
-    }
-    final data = decoded.map((key, value) => MapEntry(key.toString(), value));
-    if (cacheable && !validResponseBody(path, data)) {
+    if (cacheable &&
+        !validResponseBody(path, data, crossingId: query["crossing_id"])) {
       if (saved != null) return saved.restored();
       throw RailException(
         "The service returned invalid data. Try again in a moment.",
@@ -279,12 +363,21 @@ class HttpRailApi implements RailApi, CommunityApi {
     if (cacheable &&
         saved != null &&
         data["error"] != null &&
+        data["error"] != "crossing_not_found" &&
+        !(path == "/scene" && data["legacy_alias_resolved"] == true) &&
         data["error"] != "") {
       return saved.restored();
     }
     if (cacheable && (data["error"] == null || data["error"] == "")) {
       var at = DateTime.now();
-      if (pending != null && version >= pending.storedVersion) {
+      final degraded =
+          (data["map_warning"] as String?)?.isNotEmpty == true ||
+          TrainCoverage.tryParse(data["coverage"])?.incomplete == true;
+      if (pending != null &&
+          version >= pending.storedVersion &&
+          historyGeneration == storage?.historyGeneration &&
+          !degraded &&
+          (path != "/scene" || data["available"] == true)) {
         pending.storedVersion = version;
         at = await storage?.saveResponse(key, data) ?? at;
       }
