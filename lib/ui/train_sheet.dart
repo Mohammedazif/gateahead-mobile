@@ -6,6 +6,8 @@ import "../format.dart";
 import "../models.dart";
 import "../rail_controller.dart";
 import "../theme.dart";
+import "commute_controls.dart";
+import "crossing_access.dart";
 import "feature_controls.dart";
 import "location_control.dart";
 
@@ -363,6 +365,7 @@ class _TrainSheetState extends State<TrainSheet> {
                         style: text.bodyMedium?.copyWith(color: colors.muted),
                       ),
                       SavedGateControls(rail: rail),
+                      CommuteControls(rail: rail),
                     ],
                     if (rail.error != null && _tab != _SheetTab.saved)
                       _Notice(rail.error!),
@@ -588,11 +591,12 @@ class _CrossingDetails extends StatelessWidget {
                         ? (scene!.incomplete
                               ? "The latest check is incomplete"
                               : "No approaching train reported")
-                        : lead.status == "closed" &&
-                              lead.etaMin <= 0 &&
-                              !lead.positionOnSegment
-                        ? "Estimated passing window"
-                        : gateLabel(lead.etaMin, lead.closesInMin, lead.status),
+                        : sceneTimingLabel(
+                            lead,
+                            scene!,
+                            DateTime.now(),
+                            historical: rail.sceneHistorical,
+                          ),
                     style: text.titleLarge?.copyWith(
                       fontWeight: FontWeight.w500,
                     ),
@@ -640,6 +644,14 @@ class _CrossingDetails extends StatelessWidget {
         ],
         const SizedBox(height: 16),
         GateActions(key: ValueKey(gate.id), rail: rail, gate: gate),
+        if (rail.crossingAccess case final CrossingAccess access)
+          CrossingAccessDetails(
+            key: ValueKey("access:${gate.id}"),
+            access: access,
+            gate: gate,
+            api: rail.api,
+            saved: rail.accessSaved,
+          ),
         if (scene != null)
           CrossingTimeline(scene: scene, historical: rail.sceneHistorical),
       ],

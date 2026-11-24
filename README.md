@@ -75,7 +75,34 @@ Optional automatic checks run every two minutes while the app is visible, with w
 
 Use **Settings → Clear location history** to remove the last place and cached checks on this device while keeping explicitly saved gates.
 
-Cached predictions retain their original check time and are labeled as saved results. Stale train markers are suppressed; map tiles still need a connection. Community reports expire after ten minutes and remain separate from train predictions. Deploy a backend with `GET /reports` and `POST /reports` before using reports. Background push notifications require a separate messaging setup.
+Cached predictions retain their original check time and are labeled as saved results. Stale train markers are suppressed and map tiles still need a connection. Community reports expire after ten minutes and remain separate from train predictions. Deploy a backend with `GET /reports` and `POST /reports` before using reports.
+
+## Saved-gate phone alerts
+
+From **Saved**, open a crossing's menu and choose **Phone alerts** to set a 5, 10 or 15 minute warning window and hours in India time. The phone build and API must use the same Firebase project. A notification opens the crossing when tapped.
+
+- Android uses `android/app/google-services.json` downloaded for application ID `in.gateahead.app`. Copy it to that path before building. [Firebase Android setup](https://firebase.google.com/docs/android/setup)
+- iOS uses `ios/Runner/GoogleService-Info.plist` downloaded for bundle ID `in.gateahead.app`. Upload the APNs authentication key to the Firebase project, then create the following local Xcode configuration. Use `development` for a development provisioning profile and `production` for a distribution profile. [Firebase Apple push setup](https://firebase.google.com/docs/cloud-messaging/flutter/get-started)
+
+`ios/Flutter/Push.xcconfig`
+
+```xcconfig
+CODE_SIGN_ENTITLEMENTS = Runner/Push.entitlements
+GATEAHEAD_APS_ENVIRONMENT = development
+```
+
+The iOS push build needs a signing profile that grants the push notification entitlement. Builds without the Firebase configuration can still use saved gates, commute checks and the other crossing features.
+
+For a signed GitHub Actions test build, set the repository variable `GATEAHEAD_FIREBASE_PROJECT_ID` to the shared Firebase project. Add the credentials as repository secrets and select **Enable push** when running the corresponding workflow. The signed push builds appear in the workflow's artifacts.
+
+| Workflow | Additional secrets |
+| --- | --- |
+| Android | `GATEAHEAD_ANDROID_FIREBASE_CONFIG_BASE64` |
+| iOS | `GATEAHEAD_IOS_FIREBASE_CONFIG_BASE64`, `GATEAHEAD_IOS_CERTIFICATE_BASE64`, `GATEAHEAD_IOS_CERTIFICATE_PASSWORD`, `GATEAHEAD_IOS_PROFILE_BASE64` |
+
+Use an Apple Distribution certificate and an ad hoc profile with the test devices registered and production Push Notifications enabled. Verify a fresh install on each platform by granting permission, saving an alert while the app is open, then receiving a crossing alert in the background and opening it. Also verify that revoking alerts or denying permission is reflected in **Settings**.
+
+Configure server credentials as described under [Saved-gate phone alerts in the API README](../backend/README.md#saved-gate-phone-alerts).
 
 The Crossing Pin logo masters and header images are in `assets/branding/`. Android uses the matching launcher PNGs and adaptive icon resources in `android/app/src/main/res/`; iOS uses the opaque PNGs in `ios/Runner/Assets.xcassets/AppIcon.appiconset/`. Rebuild the app to update its launcher icon.
 

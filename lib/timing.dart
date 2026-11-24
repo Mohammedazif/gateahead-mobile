@@ -21,6 +21,9 @@ double sceneReportAge(SceneTrain train, Scene scene, DateTime now) =>
     train.ageMin +
     _elapsedMinutes(_anchor(train.snapshotAt, scene.savedAt), now);
 
+double sceneEstimateAge(SceneTrain train, Scene scene, DateTime now) =>
+    _elapsedMinutes(_anchor(train.snapshotAt, scene.savedAt), now);
+
 Map<String, Spot> sceneTrainPositions(Scene? scene, DateTime now) {
   if (scene == null || scene.offline || scene.rail.length < 2) return {};
   return {
@@ -131,6 +134,7 @@ Scene? currentScene(Scene? snapshot, DateTime now) {
     mapWarning: snapshot.mapWarning,
     mapAgeSeconds: snapshot.mapAgeSeconds,
     crossing: snapshot.crossing,
+    crossingAccess: snapshot.crossingAccess,
     rail: snapshot.rail,
     trains: snapshot.trains
         .where((row) => !numbers.contains(row.identity))
@@ -231,8 +235,9 @@ Predict? withGateChecks(
       ),
     );
     approaching = approaching.expand((row) {
-      if (!row.ids.contains(crossing.id) || !replaces(row.identity))
+      if (!row.ids.contains(crossing.id) || !replaces(row.identity)) {
         return [row];
+      }
       final ids = row.ids.where((id) => id != crossing.id).toList();
       if (ids.isEmpty) return <Approach>[];
       final remaining = exact.where(
@@ -272,8 +277,9 @@ Predict? withGateChecks(
       );
     }
     awaiting = awaiting.expand((row) {
-      if (!row.ids.contains(crossing.id) || !replaces(row.identity))
+      if (!row.ids.contains(crossing.id) || !replaces(row.identity)) {
         return [row];
+      }
       final ids = row.ids.where((id) => id != crossing.id).toList();
       return ids.isEmpty
           ? <AwaitingTrain>[]
@@ -305,8 +311,9 @@ Predict? withGateChecks(
       ),
     );
     passed = passed.expand((row) {
-      if (!row.ids.contains(crossing.id) || !replaces(row.identity))
+      if (!row.ids.contains(crossing.id) || !replaces(row.identity)) {
         return [row];
+      }
       final ids = row.ids.where((id) => id != crossing.id).toList();
       return ids.isEmpty
           ? <Passed>[]

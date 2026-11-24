@@ -667,6 +667,143 @@ class SceneCrossing {
   }
 }
 
+enum RoadAccess {
+  allowed,
+  restricted,
+  unknown;
+
+  static RoadAccess parse(Object? value) => switch (value) {
+    "allowed" => allowed,
+    "restricted" => restricted,
+    _ => unknown,
+  };
+}
+
+class CrossingBypass {
+  const CrossingBypass(
+    this.kind,
+    this.name,
+    this.place,
+    this.verifiedOn, {
+    this.replacement = false,
+  });
+
+  final String kind, name, verifiedOn;
+  final Spot place;
+  final bool replacement;
+
+  static CrossingBypass? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final kind = raw["kind"], name = raw["name"], date = raw["verified_on"];
+    final lat = _maybeNum(raw["lat"]), lon = _maybeNum(raw["lon"]);
+    if ((kind != "flyover" && kind != "underpass") ||
+        name is! String ||
+        name.trim().isEmpty ||
+        !_verifiedDate(date) ||
+        lat == null ||
+        lat.abs() > 90 ||
+        lon == null ||
+        lon.abs() > 180) {
+      return null;
+    }
+    return CrossingBypass(
+      kind,
+      name.trim(),
+      Spot(lat, lon),
+      date as String,
+      replacement: raw["replacement"] == true,
+    );
+  }
+
+  static bool _verifiedDate(Object? value) {
+    if (value is! String || !RegExp(r"^\d{4}-\d{2}-\d{2}$").hasMatch(value)) {
+      return false;
+    }
+    return DateTime.tryParse(value)
+            ?.toIso8601String()
+            .startsWith("${value}T") ??
+        false;
+  }
+}
+
+class CrossingAccess {
+  const CrossingAccess({
+    required this.cars,
+    required this.twoWheelers,
+    required this.pedestrians,
+    required this.verifiedOn,
+    required this.bypasses,
+    this.source = "mapped",
+  });
+
+  final RoadAccess cars, twoWheelers, pedestrians;
+  final String? verifiedOn;
+  final List<CrossingBypass> bypasses;
+  final String source;
+
+  static bool _currentVerification(String? value, DateTime now) {
+    if (!CrossingBypass._verifiedDate(value)) return false;
+    final india = now.toUtc().add(const Duration(hours: 5, minutes: 30));
+    final today = DateTime.utc(india.year, india.month, india.day);
+    final age = today.difference(DateTime.parse("${value}T00:00:00Z")).inDays;
+    return age >= 0 && age <= 365;
+  }
+
+  CrossingAccess current(DateTime now) {
+    final valid =
+        source == "mapped" ||
+        source == "verified" && _currentVerification(verifiedOn, now);
+    return CrossingAccess(
+      cars: valid ? cars : RoadAccess.unknown,
+      twoWheelers: valid ? twoWheelers : RoadAccess.unknown,
+      pedestrians: valid ? pedestrians : RoadAccess.unknown,
+      source: valid ? source : "unavailable",
+      verifiedOn: valid ? verifiedOn : null,
+      bypasses: [
+        for (final bypass in bypasses)
+          if (_currentVerification(bypass.verifiedOn, now)) bypass,
+      ],
+    );
+  }
+
+  static CrossingAccess? tryParse(Object? raw) {
+    if (raw is! Map ||
+        !const ["mapped", "verified", "unavailable"].contains(raw["source"])) {
+      return null;
+    }
+    final date = raw["verified_on"];
+    final bypasses = raw["bypasses"];
+    return CrossingAccess(
+      cars: RoadAccess.parse(raw["cars"]),
+      twoWheelers: RoadAccess.parse(raw["two_wheelers"]),
+      pedestrians: RoadAccess.parse(raw["pedestrians"]),
+      source: raw["source"] as String,
+      verifiedOn:
+          raw["source"] == "verified" && CrossingBypass._verifiedDate(date)
+          ? date as String
+          : null,
+      bypasses: [
+        if (bypasses is List)
+          for (final bypass in bypasses) ?CrossingBypass.tryParse(bypass),
+      ],
+    );
+  }
+}
+
+class CrossingDetails {
+  const CrossingDetails({
+    required this.crossing,
+    required this.access,
+    required this.aliasResolved,
+    required this.mapWarning,
+  });
+
+  final SceneCrossing crossing;
+  final CrossingAccess access;
+  final bool aliasResolved;
+  final String mapWarning;
+}
+
 class Scene {
   const Scene({
     this.serviceUpdates = const [],
@@ -677,6 +814,7 @@ class Scene {
     this.mapWarning = "",
     this.mapAgeSeconds,
     this.crossing,
+    this.crossingAccess,
     this.rail = const [],
     this.trains = const [],
     this.passed = const [],
@@ -698,6 +836,7 @@ class Scene {
   final double? mapAgeSeconds;
   bool get incomplete => mapWarning.isNotEmpty || coverage?.incomplete == true;
   final SceneCrossing? crossing;
+  final CrossingAccess? crossingAccess;
   final List<Spot> rail;
   final List<SceneTrain> trains;
 
@@ -713,6 +852,7 @@ class Scene {
     mapWarning: mapWarning,
     mapAgeSeconds: mapAgeSeconds,
     crossing: crossing,
+    crossingAccess: crossingAccess,
     rail: rail,
     trains: trains,
     passed: passed,
@@ -750,6 +890,7 @@ class Scene {
       mapWarning: _str(json["map_warning"]),
       mapAgeSeconds: _maybeNum(json["map_age_seconds"]),
       crossing: SceneCrossing.tryParse(json["crossing"]),
+      crossingAccess: CrossingAccess.tryParse(json["crossing_access"]),
       rail: rail,
       trains: [
         for (final row in (json["trains"] as List?) ?? const [])

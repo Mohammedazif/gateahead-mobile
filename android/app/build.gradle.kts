@@ -4,6 +4,10 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+if (file("google-services.json").isFile) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 val releaseKeystorePath = System.getenv("GATEAHEAD_ANDROID_KEYSTORE_PATH")
 
 android {
@@ -12,6 +16,7 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -51,6 +56,10 @@ android {
             )
         }
     }
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 kotlin {

@@ -1,13 +1,12 @@
+import "dart:async";
+
 import "package:flutter/material.dart";
 import "package:flutter/services.dart";
+import "package:shared_preferences/shared_preferences.dart";
 
 import "api.dart";
 import "device_store.dart";
-
-import "package:shared_preferences/shared_preferences.dart";
-
-import "dart:async";
-
+import "phone_push.dart";
 import "rail_controller.dart";
 import "theme.dart";
 import "ui/home_page.dart";
@@ -20,11 +19,13 @@ Future<void> main() async {
     await SharedPreferences.getInstance(),
     namespace: defaultApiBase,
   );
+  final phonePush = await FirebasePhonePush.setup();
   final rail = RailController(
     HttpRailApi(base: defaultApiBase, storage: storage),
     storage: storage,
+    phonePush: phonePush,
   );
-  runApp(GateAheadApp(rail: rail, initialMode: mode));
+  runApp(GateAheadApp(rail: rail, initialMode: mode, phonePush: phonePush));
   unawaited(rail.restore());
 }
 
@@ -48,10 +49,12 @@ class GateAheadApp extends StatefulWidget {
     super.key,
     required this.rail,
     this.initialMode = RailThemeMode.dark,
+    this.phonePush,
   });
 
   final RailController rail;
   final RailThemeMode initialMode;
+  final FirebasePhonePush? phonePush;
 
   @override
   State<GateAheadApp> createState() => _GateAheadAppState();
@@ -59,9 +62,45 @@ class GateAheadApp extends StatefulWidget {
 
 class _GateAheadAppState extends State<GateAheadApp> {
   late RailThemeMode _mode = widget.initialMode;
+  final _messenger = GlobalKey<ScaffoldMessengerState>();
+  StreamSubscription<String>? _opened;
+  StreamSubscription<CrossingNotification>? _foreground;
+
+  @override
+  void initState() {
+    super.initState();
+    final push = widget.phonePush;
+    if (push == null) return;
+    _opened = push.opened.listen(_openCrossing);
+    _foreground = push.foreground.listen(_showNotification);
+    unawaited(_openInitial(push));
+  }
+
+  Future<void> _openInitial(FirebasePhonePush push) async {
+    final link = await push.initialLink();
+    if (mounted && link != null) _openCrossing(link);
+  }
+
+  void _openCrossing(String link) {
+    unawaited(widget.rail.openLink(link));
+  }
+
+  void _showNotification(CrossingNotification notice) {
+    _messenger.currentState?.showSnackBar(
+      SnackBar(
+        content: Text("${notice.title}\n${notice.body}"),
+        action: SnackBarAction(
+          label: "View crossing",
+          onPressed: () => _openCrossing(notice.link),
+        ),
+      ),
+    );
+  }
 
   @override
   void dispose() {
+    unawaited(_opened?.cancel());
+    unawaited(_foreground?.cancel());
     widget.rail.dispose();
     super.dispose();
   }
@@ -85,6 +124,7 @@ class _GateAheadAppState extends State<GateAheadApp> {
         debugShowCheckedModeBanner: false,
         theme: railTheme(colors),
         themeAnimationDuration: Duration.zero,
+        scaffoldMessengerKey: _messenger,
         home: HomePage(rail: widget.rail),
       ),
     );

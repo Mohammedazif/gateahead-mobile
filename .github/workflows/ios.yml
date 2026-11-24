@@ -2,6 +2,11 @@ name: iPhone app
 
 on:
   workflow_dispatch:
+    inputs:
+      enable_push:
+        description: Build a signed Firebase push test artifact
+        type: boolean
+        default: false
   push:
     tags:
       - "v*"
@@ -40,11 +45,13 @@ jobs:
         run: flutter test
       # Sideloadly or AltStore signs this device build with the installer's Apple ID.
       - name: Build iPhone app
+        if: ${{ !inputs.enable_push }}
         run: |
           flutter build ios --release --no-codesign \
             --build-number="$GITHUB_RUN_NUMBER" \
             --dart-define="API_BASE=$API_BASE"
       - name: Package unsigned IPA
+        if: ${{ !inputs.enable_push }}
         run: |
           package_dir="$RUNNER_TEMP/gateahead-ipa"
           mkdir -p "$package_dir/Payload" dist
@@ -55,14 +62,24 @@ jobs:
             zip -qry "$GITHUB_WORKSPACE/dist/gateahead-ios-unsigned.ipa" Payload
           )
           unzip -t dist/gateahead-ios-unsigned.ipa
+      - name: Build and verify signed push IPA
+        if: ${{ inputs.enable_push }}
+        env:
+          FIREBASE_CONFIG: ${{ secrets.GATEAHEAD_IOS_FIREBASE_CONFIG_BASE64 }}
+          FIREBASE_PROJECT: ${{ vars.GATEAHEAD_FIREBASE_PROJECT_ID }}
+          SIGNING_CERTIFICATE: ${{ secrets.GATEAHEAD_IOS_CERTIFICATE_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.GATEAHEAD_IOS_CERTIFICATE_PASSWORD }}
+          PROVISIONING_PROFILE: ${{ secrets.GATEAHEAD_IOS_PROFILE_BASE64 }}
+        run: bash tools/build-ios-push.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: verified-ios-ipa
-          path: dist/gateahead-ios-unsigned.ipa
+          name: ${{ inputs.enable_push && 'verified-ios-push-ipa' || 'verified-ios-ipa' }}
+          path: ${{ inputs.enable_push && 'dist/gateahead-ios-push.ipa' || 'dist/gateahead-ios-unsigned.ipa' }}
           if-no-files-found: error
           retention-days: 1
 
   publish:
+    if: ${{ !inputs.enable_push }}
     needs: ipa
     runs-on: ubuntu-latest
     permissions:

@@ -103,6 +103,22 @@ class DeviceStore {
   final String namespace;
   int _historyGeneration = 0;
   int get historyGeneration => _historyGeneration;
+  DateTime? _railPause;
+
+  DateTime? get railPause {
+    final stored = storedDateTime(read("paused-until"));
+    return _railPause == null || (stored?.isAfter(_railPause!) ?? false)
+        ? stored
+        : _railPause;
+  }
+
+  Future<DateTime> extendRailPause(DateTime until) async {
+    final previous = railPause;
+    if (previous != null && !until.isAfter(previous)) return previous;
+    _railPause = until;
+    await write("paused-until", until.millisecondsSinceEpoch);
+    return railPause ?? until;
+  }
 
   dynamic read(String key) {
     try {
@@ -204,9 +220,14 @@ class DeviceStore {
     return result;
   }
 
-  Future<DateTime> saveResponse(String key, Map<String, dynamic> data) async {
-    final at = DateTime.now();
+  Future<DateTime> saveResponse(
+    String key,
+    Map<String, dynamic> data, {
+    DateTime? receivedAt,
+  }) async {
+    final at = receivedAt ?? DateTime.now();
     final all = _responses();
+    if (all[key]?.at.isAfter(at) ?? false) return at;
     all[key] = CachedJson(at, data);
     final keys = all.keys.toList()
       ..sort((a, b) => all[b]!.at.compareTo(all[a]!.at));
@@ -386,6 +407,11 @@ bool sceneIdentityMatches(
 
 String responseKey(String path, double lat, double lon) =>
     "$path?lat=$lat&lon=$lon";
+
+String sceneResponseKey(double lat, double lon, String crossingId) => Uri(
+  path: "/scene",
+  queryParameters: {"lat": "$lat", "lon": "$lon", "crossing_id": crossingId},
+).toString();
 
 ({Spot place, String? gateId})? parseCrossingLink(String text) {
   final uri = Uri.tryParse(text.trim());

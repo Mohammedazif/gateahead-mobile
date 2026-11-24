@@ -8,6 +8,7 @@ import "../device_store.dart";
 import "../models.dart";
 import "../rail_controller.dart";
 import "../theme.dart";
+import "phone_alert_controls.dart";
 
 Future<String?> editGateName(BuildContext context, String initial) =>
     showDialog<String>(
@@ -119,8 +120,18 @@ class SavedGateControls extends StatelessWidget {
                 ),
                 leading: Icon(Icons.bookmark_border, color: colors.accent),
                 title: Text(item.label),
-                subtitle: Text(
-                  item.gate.name.isEmpty ? "Level crossing" : item.gate.name,
+                subtitle: ListenableBuilder(
+                  listenable: rail.phoneAlerts,
+                  builder: (context, _) {
+                    final gateName = item.gate.name.isEmpty
+                        ? "Level crossing"
+                        : item.gate.name;
+                    final alerts = rail.phoneAlerts;
+                    if (alerts.settingsFor(item.gate.id) == null) {
+                      return Text(gateName);
+                    }
+                    return Text("$gateName\nPhone alerts · ${alerts.badge}");
+                  },
                 ),
                 onTap: () async {
                   await rail.openSaved(item);
@@ -133,6 +144,14 @@ class SavedGateControls extends StatelessWidget {
                 trailing: PopupMenuButton<String>(
                   tooltip: "Manage ${item.label}",
                   onSelected: (action) async {
+                    if (action == "alerts") {
+                      await showPhoneAlertSettings(
+                        context,
+                        rail.phoneAlerts,
+                        item,
+                      );
+                      return;
+                    }
                     if (action == "remove") {
                       rail.removeSaved(item.gate.id);
                       return;
@@ -142,13 +161,20 @@ class SavedGateControls extends StatelessWidget {
                   },
                   itemBuilder: (context) => [
                     const PopupMenuItem(value: "rename", child: Text("Rename")),
+                    if (!isLegacyCrossingId(item.gate.id) &&
+                        (rail.phoneAlerts.canSetUp ||
+                            rail.phoneAlerts.settingsFor(item.gate.id) != null))
+                      const PopupMenuItem(
+                        value: "alerts",
+                        child: Text("Phone alerts"),
+                      ),
                     const PopupMenuItem(value: "remove", child: Text("Remove")),
                   ],
                 ),
               ),
             ),
           Text(
-            "Saved on this device.",
+            "Saved on this device. Phone alerts share selected crossing details and alert hours.",
             style: text.bodySmall?.copyWith(color: colors.muted),
           ),
         ],
@@ -272,6 +298,7 @@ Future<void> showRailSettings(BuildContext context, RailController rail) =>
                         style: text.bodyMedium?.copyWith(color: colors.muted),
                       ),
                       RefreshControls(rail: rail),
+                      PhoneAlertControls(alerts: rail.phoneAlerts),
                       const SizedBox(height: 24),
                       Text("Location history", style: text.titleMedium),
                       const Text(

@@ -97,6 +97,44 @@ String gateLabel(double eta, [double? closesIn, String? status]) {
   return "closes in ${_span(downIn)}";
 }
 
+String sceneTimingLabel(
+  SceneTrain train,
+  Scene scene,
+  DateTime now, {
+  required bool historical,
+}) {
+  if (historical) {
+    return train.etaMin <= 0
+        ? "Estimated passing window at check"
+        : "Train was due in ${train.etaMin.ceil()} min at check";
+  }
+  if (train.movement == "stopped") {
+    return "Departure timing uncertain";
+  }
+  final elapsed = sceneEstimateAge(train, scene, now);
+  final eta = train.etaMin - elapsed;
+  final closes = train.closesInMin == null
+      ? null
+      : train.closesInMin! - elapsed;
+  if (train.observed == false) {
+    return eta > 0
+        ? "Scheduled train in ${eta.ceil()} min"
+        : "Scheduled arrival time has elapsed";
+  }
+  if (eta <= 0) {
+    return eta < -2 || train.status == "approaching" || train.status == "later"
+        ? "Estimated arrival time has elapsed"
+        : "Estimated passing window";
+  }
+  if (closes == null) return "Train estimated in ${eta.ceil()} min";
+  if (closes <= 0) {
+    return train.status == "closed" || train.status == "closing_soon"
+        ? "Estimated closure window · train due in ${eta.ceil()} min"
+        : "Barrier timing uncertain · train estimated in ${eta.ceil()} min";
+  }
+  return gateLabel(eta, closes, train.status);
+}
+
 String passedLabel(double ago) {
   if (ago < 1) return "passed just now";
   return "passed ${ago.round()} min ago";

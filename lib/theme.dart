@@ -193,6 +193,23 @@ ThemeData railTheme(RailColors colors) {
   );
 }
 
+ThemeData railActionTheme(BuildContext context) {
+  final theme = Theme.of(context);
+  final accent = RailColors.of(context).accent;
+  return theme.copyWith(
+    textButtonTheme: TextButtonThemeData(
+      style: (theme.textButtonTheme.style ?? const ButtonStyle()).merge(
+        TextButton.styleFrom(foregroundColor: accent),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: (theme.outlinedButtonTheme.style ?? const ButtonStyle()).merge(
+        OutlinedButton.styleFrom(foregroundColor: accent),
+      ),
+    ),
+  );
+}
+
 class RailThemeStore {
   static const key = "gateahead-theme";
   static const legacyKey = "smartrail-theme";

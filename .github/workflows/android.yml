@@ -2,6 +2,11 @@ name: Android app
 
 on:
   workflow_dispatch:
+    inputs:
+      enable_push:
+        description: Build a signed Firebase push test artifact
+        type: boolean
+        default: false
   push:
     tags:
       - "v*"
@@ -61,6 +66,20 @@ jobs:
           signing_key="$RUNNER_TEMP/gateahead-android.p12"
           printf '%s' "$KEYSTORE" | base64 --decode > "$signing_key"
           echo "GATEAHEAD_ANDROID_KEYSTORE_PATH=$signing_key" >> "$GITHUB_ENV"
+      - name: Configure Firebase for push
+        if: ${{ inputs.enable_push }}
+        env:
+          FIREBASE_CONFIG: ${{ secrets.GATEAHEAD_ANDROID_FIREBASE_CONFIG_BASE64 }}
+          FIREBASE_PROJECT: ${{ vars.GATEAHEAD_FIREBASE_PROJECT_ID }}
+        run: |
+          test -n "$FIREBASE_CONFIG"
+          test -n "$FIREBASE_PROJECT"
+          umask 077
+          printf '%s' "$FIREBASE_CONFIG" | base64 --decode > android/app/google-services.json
+          jq -e --arg project "$FIREBASE_PROJECT" '
+            .project_info.project_id == $project and
+            any(.client[]; .client_info.android_client_info.package_name == "in.gateahead.app")
+          ' android/app/google-services.json > /dev/null
       - name: Build APK
         env:
           GATEAHEAD_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.GATEAHEAD_ANDROID_KEYSTORE_PASSWORD }}
@@ -86,17 +105,42 @@ jobs:
             echo "::error::The APK signer does not match GATEAHEAD_ANDROID_CERT_SHA256. Restore the permanent release key before publishing."
             exit 1
           fi
-      - name: Remove signing key
+      - name: Verify packaged Firebase resources
+        if: ${{ inputs.enable_push }}
+        env:
+          FIREBASE_PROJECT: ${{ vars.GATEAHEAD_FIREBASE_PROJECT_ID }}
+        run: |
+          tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          "$tools/aapt2" dump resources dist/gateahead-android.apk > "$RUNNER_TEMP/gateahead-apk-resources.txt"
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "gateahead-apk-resources.txt"
+          values = {}
+          resource = None
+          for line in path.read_text().splitlines():
+              if re.search(r"\bresource 0x", line):
+                  match = re.search(r"\bstring/(project_id|google_app_id)\b", line)
+                  resource = match.group(1) if match else None
+              elif resource and (value := re.search(r'\(\)\s+"([^"]+)"', line)):
+                  values[resource] = value.group(1)
+          if values.get("project_id") != os.environ["FIREBASE_PROJECT"] or not values.get("google_app_id"):
+              raise SystemExit("Signed APK is missing the requested Firebase configuration")
+          PY
+      - name: Remove build credentials
         if: always()
-        run: rm -f "$RUNNER_TEMP/gateahead-android.p12"
+        run: rm -f "$RUNNER_TEMP/gateahead-android.p12" android/app/google-services.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: verified-android-apk
+          name: ${{ inputs.enable_push && 'verified-android-push-apk' || 'verified-android-apk' }}
           path: dist/gateahead-android.apk
           if-no-files-found: error
           retention-days: 1
 
   publish:
+    if: ${{ !inputs.enable_push }}
     needs: apk
     runs-on: ubuntu-latest
     permissions:

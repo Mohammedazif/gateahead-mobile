@@ -44,6 +44,9 @@ void main() {
           if (request.url.path == "/gates") {
             return http.Response(jsonEncode({"gates": []}), 200);
           }
+          if (request.url.path == "/crossing-details") {
+            return http.Response('{"detail":"Not Found"}', 404);
+          }
           final reply = Completer<http.Response>();
           replies.add(reply);
           return reply.future;

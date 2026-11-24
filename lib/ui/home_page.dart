@@ -69,6 +69,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _visible = state == AppLifecycleState.resumed;
+    if (_visible) unawaited(rail.phoneAlerts.resume());
   }
 
   final GlobalKey _mapKey = GlobalKey();

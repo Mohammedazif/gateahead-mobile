@@ -3,9 +3,12 @@ import "dart:async";
 import "package:flutter/foundation.dart";
 
 import "api.dart";
+import "commutes.dart";
 import "format.dart";
 import "models.dart";
 import "device_store.dart";
+import "phone_alerts.dart";
+import "phone_push.dart";
 import "timing.dart";
 
 class RailController extends ChangeNotifier {
@@ -13,15 +16,26 @@ class RailController extends ChangeNotifier {
     this.api, {
     this.nameDelay = const Duration(milliseconds: 280),
     this.storage,
+    PhonePushRegistration? phonePush,
   }) {
     favorites = storage?.favorites() ?? [];
     refresh = storage?.settings() ?? const RefreshSettings();
-    pausedUntil = storedDateTime(storage?.read("paused-until"));
+    pausedUntil = storage?.railPause;
+    commutes = CommuteChecks(
+      api,
+      storage,
+      _pauseChecks,
+      favorites: favorites,
+      onAlias: _migrateSavedCrossing,
+    );
+    phoneAlerts = PhoneAlerts(api, storage, phonePush, () => favorites);
   }
 
   final DeviceStore? storage;
   late List<SavedGate> favorites;
   late RefreshSettings refresh;
+  late final CommuteChecks commutes;
+  late final PhoneAlerts phoneAlerts;
   DateTime? lastAttempt;
   DateTime? pausedUntil;
   bool gatesCached = false;
@@ -31,8 +45,13 @@ class RailController extends ChangeNotifier {
       predict?.offline == true ||
       (checkedAt != null &&
           DateTime.now().difference(checkedAt!).inMinutes >= 5);
-  bool get paused =>
-      pausedUntil != null && DateTime.now().isBefore(pausedUntil!);
+  bool get paused => railPause?.isAfter(DateTime.now()) == true;
+  DateTime? get railPause {
+    final stored = storage?.railPause;
+    final known = pausedUntil;
+    return known == null || (stored?.isAfter(known) ?? false) ? stored : known;
+  }
+
   bool get sceneHistorical =>
       scene?.offline == true ||
       (scene?.savedAt != null &&
@@ -84,6 +103,21 @@ class RailController extends ChangeNotifier {
   Scene? _scene;
   Scene? get scene => currentScene(_scene, DateTime.now());
   set scene(Scene? value) => _scene = value;
+  CrossingDetails? _accessDetails;
+  CrossingAccess? get crossingAccess {
+    final details = _accessDetails;
+    if (details != null && details.crossing.id == selected?.id) {
+      return details.access.current(DateTime.now());
+    }
+    final snapshot = _scene;
+    if (snapshot == null || snapshot.crossing?.id != selected?.id) return null;
+    return snapshot.crossingAccess?.current(DateTime.now());
+  }
+
+  bool get accessSaved =>
+      _accessDetails == null &&
+          (_scene?.offline == true || _scene?.mapWarning.isNotEmpty == true) ||
+      _accessDetails?.mapWarning.isNotEmpty == true;
   bool sceneLoading = false;
   String? sceneMessage;
 
@@ -175,6 +209,7 @@ class RailController extends ChangeNotifier {
     error = null;
     selected = null;
     scene = null;
+    _accessDetails = null;
     sceneLoading = false;
     sceneMessage = null;
     locating = false;
@@ -282,16 +317,16 @@ class RailController extends ChangeNotifier {
 
   Future<void> check({bool automatic = false}) async {
     final here = place;
-    if (here == null || checking) return;
+    if (here == null || checking || commutes.checking != null) return;
     if (paused) {
       if (!automatic) {
-        error = "Checks are paused until ${pausedUntil!.toLocal()}.";
+        error = "Checks are paused until ${railPause!.toLocal()}.";
         notifyListeners();
       }
       return;
     }
-    if (lastAttempt != null &&
-        DateTime.now().difference(lastAttempt!).inSeconds < 90) {
+    final last = _lastRailCheck;
+    if (last != null && DateTime.now().difference(last).inSeconds < 90) {
       if (!automatic) {
         error = "Checked recently. Wait 90 seconds between train checks.";
         notifyListeners();
@@ -315,15 +350,7 @@ class RailController extends ChangeNotifier {
     } on RailException catch (err) {
       if (ticket != _generation) return;
       error = err.message;
-      if (err.retryAt != null) {
-        pausedUntil = err.retryAt;
-        unawaited(
-          storage
-                  ?.write("paused-until", pausedUntil!.millisecondsSinceEpoch)
-                  .then<void>((_) {}) ??
-              Future<void>.value(),
-        );
-      }
+      if (err.retryAt case final DateTime retryAt) _pauseChecks(retryAt);
     } catch (_) {
       if (ticket != _generation) return;
       error = "Could not check trains.";
@@ -335,19 +362,42 @@ class RailController extends ChangeNotifier {
     }
   }
 
+  DateTime? get _lastRailCheck {
+    final commute = commutes.startedAt;
+    final normal = lastAttempt;
+    return normal == null || (commute?.isAfter(normal) ?? false)
+        ? commute
+        : normal;
+  }
+
+  Future<void> checkCommute(SavedCommute trip) async {
+    if (checking || sceneLoading) return;
+    await commutes.check(
+      trip,
+      favorites,
+      pausedUntil: railPause,
+      lastNearbyCheck: lastAttempt,
+    );
+  }
+
   Future<void> openGate(Gate gate, {bool refreshing = false}) async {
     final here = place;
     if (here == null) return;
+    if (!refreshing) commutes.cancelCheck();
     final ticket = ++_sceneTicket;
     final previous = selected?.id == gate.id
         ? _scene ?? _gateChecks[gate.id]
         : _gateChecks[gate.id];
     selected = gate;
     sceneLoading = !refreshing;
-    if (!refreshing) scene = null;
+    if (!refreshing) {
+      scene = null;
+      if (_accessDetails?.crossing.id != gate.id) _accessDetails = null;
+    }
     sceneMessage = null;
     selectionNote = null;
     notifyListeners();
+    if (_accessDetails == null) unawaited(_readCrossingAccess(gate, ticket));
     try {
       final body = await api.scene(here.lat, here.lon, gate.id);
       if (ticket != _sceneTicket) return;
@@ -387,15 +437,7 @@ class RailController extends ChangeNotifier {
       if (ticket != _sceneTicket) return;
       scene = previous?.asSaved();
       sceneMessage = err.message;
-      if (err.retryAt != null) {
-        pausedUntil = err.retryAt;
-        unawaited(
-          storage
-                  ?.write("paused-until", pausedUntil!.millisecondsSinceEpoch)
-                  .then<void>((_) {}) ??
-              Future<void>.value(),
-        );
-      }
+      if (err.retryAt case final DateTime retryAt) _pauseChecks(retryAt);
     } catch (_) {
       if (ticket != _sceneTicket) return;
       scene = previous?.asSaved();
@@ -408,7 +450,48 @@ class RailController extends ChangeNotifier {
     }
   }
 
+  Future<void> _readCrossingAccess(Gate gate, int ticket) async {
+    final service = api;
+    if (service is! CrossingDetailsApi) return;
+    try {
+      final details = await (service as CrossingDetailsApi).crossingDetails(
+        gate,
+      );
+      if (ticket != _sceneTicket ||
+          !sceneIdentityMatches(
+            gate.id,
+            details.crossing.id,
+            aliasResolved: details.aliasResolved,
+          )) {
+        return;
+      }
+      if (details.crossing.id != gate.id && details.mapWarning.isEmpty) {
+        _updateLegacySelection(gate, details.crossing);
+      }
+      _accessDetails = details;
+      notifyListeners();
+    } on CrossingDetailsNotFound {
+      if (ticket == _sceneTicket) _unavailableCrossing(gate.id);
+    } catch (_) {
+      // Older APIs and cached train scenes can still provide crossing access.
+    }
+  }
+
+  void _pauseChecks(DateTime retryAt) {
+    if (pausedUntil?.isAfter(retryAt) == true) return;
+    pausedUntil = retryAt;
+    final store = storage;
+    if (store != null) {
+      unawaited(store.extendRailPause(retryAt));
+    }
+    notifyListeners();
+  }
+
   void _updateLegacySelection(Gate legacy, SceneCrossing crossing) {
+    selected = _migrateGate(legacy, crossing);
+  }
+
+  Gate _migrateGate(Gate legacy, SceneCrossing crossing) {
     final canonical =
         gates.where((gate) => gate.id == crossing.id).firstOrNull ??
         Gate(
@@ -419,17 +502,24 @@ class RailController extends ChangeNotifier {
           km: legacy.km,
           source: legacy.source,
         );
-    selected = canonical;
     if (favorites.any((row) => row.gate.id == legacy.id)) {
+      final hasCanonical = favorites.any((row) => row.gate.id == canonical.id);
       favorites = [
         for (final row in favorites)
-          if (row.gate.id == legacy.id)
-            SavedGate(canonical, row.label, row.place)
-          else
-            row,
+          if (row.gate.id != legacy.id)
+            row
+          else if (!hasCanonical)
+            SavedGate(canonical, row.label, row.place),
       ];
+      commutes.replaceGate(legacy.id, crossing.id);
+      phoneAlerts.replaceGate(legacy.id, crossing.id);
       _saveFavorites();
     }
+    return canonical;
+  }
+
+  void _migrateSavedCrossing(SavedGate saved, SceneCrossing crossing) {
+    _migrateGate(saved.gate, crossing);
   }
 
   void _unavailableCrossing(String id) {
@@ -457,6 +547,7 @@ class RailController extends ChangeNotifier {
     lastAttempt = null;
     _predict = null;
     _gateChecks.clear();
+    commutes.clearHistory();
     gates = const [];
     gatesAuthoritative = false;
     gatesCached = false;
@@ -469,6 +560,8 @@ class RailController extends ChangeNotifier {
   }
 
   Future<void> restore() async {
+    phoneAlerts.reconcileSavedGates();
+    unawaited(phoneAlerts.resume());
     final row = storage?.read("last-place");
     if (row is Map && validCoordinates(row["lat"], row["lon"])) {
       await choosePlace(
@@ -496,8 +589,8 @@ class RailController extends ChangeNotifier {
         paused) {
       return;
     }
-    if (lastAttempt != null &&
-        DateTime.now().difference(lastAttempt!).inSeconds < 120) {
+    final last = _lastRailCheck;
+    if (last != null && DateTime.now().difference(last).inSeconds < 120) {
       return;
     }
     await check(automatic: true);
@@ -533,6 +626,8 @@ class RailController extends ChangeNotifier {
   }
 
   void _saveFavorites() {
+    commutes.reconcileSavedGates(favorites);
+    phoneAlerts.reconcileSavedGates();
     unawaited(
       storage
               ?.write(
@@ -598,6 +693,7 @@ class RailController extends ChangeNotifier {
     _sceneTicket += 1;
     selected = null;
     scene = null;
+    _accessDetails = null;
     sceneLoading = false;
     sceneMessage = null;
     notifyListeners();
@@ -609,6 +705,8 @@ class RailController extends ChangeNotifier {
     _sceneTicket += 1;
     pending = null;
     _nameTimer?.cancel();
+    commutes.dispose();
+    phoneAlerts.dispose();
     super.dispose();
   }
 }
