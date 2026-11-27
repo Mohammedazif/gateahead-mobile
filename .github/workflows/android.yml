@@ -100,8 +100,12 @@ jobs:
             echo "::error::The APK must use the permanent GateAhead signing key."
             exit 1
           fi
-          actual_cert=$(sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: ([[:xdigit:]]{64})$/\1/p' "$RUNNER_TEMP/android-signer.txt")
-          if [[ "${actual_cert,,}" != "${EXPECTED_CERT,,}" ]]; then
+          # Build-tools versions label the signer by index or by signature scheme.
+          actual_cert=$(
+            sed -nE 's/^(V[0-9.]+ )?Signer( #[0-9]+)?:? certificate SHA-256 digest: ([[:xdigit:]]{64})$/\3/p' "$RUNNER_TEMP/android-signer.txt" |
+              tr '[:upper:]' '[:lower:]' | sort -u
+          )
+          if [[ "$actual_cert" != "${EXPECTED_CERT,,}" ]]; then
             echo "::error::The APK signer does not match GATEAHEAD_ANDROID_CERT_SHA256. Restore the permanent release key before publishing."
             exit 1
           fi
